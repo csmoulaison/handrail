@@ -3,8 +3,8 @@ $TARGET           = $args[1]
 $DEBUG_OR_RELEASE = $args[2]
 
 # Common arguments to static and dynamic builds
-$FLAGS   = "/std:c11", "/W1", "/WX"
-$INCLUDE = "/I.\code", "/I.\extern"
+$FLAGS   = "/std:c11", "/W1", "/WX", "/Zi"
+$INCLUDE = "/Ihandrail\code\", "/Icode\", "/Ihandrail\extern\"
 
 switch($DEBUG_OR_RELEASE) {
     "debug" { $FLAGS += ""; break }
@@ -37,8 +37,8 @@ function End-Step {
 
 function Prebuild {
     Start-Step "Prebuild"
-    if(Test-Path -Path "build\build.exe") {
-        build\build
+    if(Test-Path -Path "build\prebuild.exe") {
+        build\prebuild
         if(!$?) {
 			Error-On-Exit
 		}
@@ -48,7 +48,7 @@ function Prebuild {
 
 function Bootstrap {
     Start-Step "Bootstrap"
-	cl code\build.c $FLAGS /Fe:build\build.exe /Fo:build\ /nologo
+	cl code\prebuild.c $INCLUDE $FLAGS /Fe:build\prebuild.exe /Fo:build\ /nologo
     End-Step
 }
 
@@ -61,38 +61,27 @@ function Static {
 
     Start-Step "Static (build)"
 	# NOW: add asset pack
-    cl code\csm_core\main.c extern\GL\gl3w.c `
-        /Fe:bin\template.exe /Fo:build\ `
+    cl handrail\code\main.c handrail\extern\GL\gl3w.c `
+        /Fe:bin\game.exe /Fo:build\ /Fd:bin\ `
         $INCLUDE `
         $FLAGS `
-		/DGAME_NAME="template" /DGAME_LIB_NAME="template.so" `
+		/D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.so\"' `
 		/nologo `
 		/link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib opengl32.lib
     End-Step
 }
 
 function Dynamic {
-    #Start-Step "Game library (intermediate)"
-    #cl code\game.c `
-    #    /Fo:build\${EXE}.o `
-    #    $INCLUDE `
-    #    $FLAGS -c -fPIC
-    #End-Step
-
     Start-Step "Game library (final)"
-    #cl build\${EXE}.o `
-    #    /Fe:bin\${EXE}_tmp.so `
-    #    $INCLUDE `
-    #    $FLAGS -shared
 	cl code\game.c `
 		/Fo:build\ `
 		/nologo `
         $INCLUDE `
 	    $FLAGS /LD /link /EXPORT:game_init /EXPORT:game_update /EXPORT:game_audio_callback `
-		/OUT:bin\template_tmp.dll /IMPLIB:build\template.lib
+		/OUT:bin\game_tmp.dll /IMPLIB:build\game.lib
     End-Step
 
-    Move-Item -Path bin\template_tmp.dll -Destination bin\template.dll -Force
+    Move-Item -Path bin\game_tmp.dll -Destination bin\game.dll -Force
 }
 
 switch($TARGET) {

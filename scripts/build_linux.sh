@@ -1,6 +1,6 @@
-EXE=$1
+$EXE=$1
 TARGET=$2
-DEBUG_OR_RELEASE=$3
+$DEBUG_OR_RELEASE=$3
 
 # Common arguments to static and dynamic builds
 FLAGS="-std=c99 -Wall -Werror -Wno-unused "

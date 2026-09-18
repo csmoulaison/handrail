@@ -54,31 +54,31 @@ typedef size_t   usize;
 #define MEGABYTE 1000000
 #define GIGABYTE 1000000000
 
-#include "./assert.h"
-#include "./log.h"
-#include "./string.h"
-#include "./buffer.h"
-#include "./stack.h"
-#include "./random.h"
-#include "./file.h"
-#include "./math.h"
-#include "./game.h"
+#include "handrail/assert.h"
+#include "handrail/string.h"
+#include "handrail/log.h"
+#include "handrail/buffer.h"
+#include "handrail/stack.h"
+#include "handrail/random.h"
+#include "handrail/file.h"
+#include "handrail/math.h"
 
 #ifdef CSM_INCLUDE_GL
-#include "./gpu/gl.h"
+#include "handrail/gpu/gl.h"
 #endif
 
-#include "./platform.h"
-#include "./fiedler.h"
-#include "./dynamic_library.h"
+#include "handrail/platform.h"
+#include "handrail/fiedler.h"
+#include "handrail/dynamic_library.h"
+#include "handrail/game.h"
 
-#include "./media/asset_builder.h"
-#include "./media/mesh.h"
-#include "./media/texture.h"
-#include "./media/sprite.h"
-#include "./media/aseprite.h"
-#include "./media/blender.h"
-#include "./media/synth.h"
-#include "./media/font.h"
+#include "handrail/media/asset_builder.h"
+#include "handrail/media/mesh.h"
+#include "handrail/media/texture.h"
+#include "handrail/media/sprite.h"
+#include "handrail/media/aseprite.h"
+#include "handrail/media/blender.h"
+#include "handrail/media/synth.h"
+#include "handrail/media/font.h"
 
 #endif

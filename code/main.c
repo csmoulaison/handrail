@@ -2,7 +2,7 @@
 #define CSM_INCLUDE_GL
 #define BUFFER_DEBUG true
 #define BUFFER_VERBOSE false
-#include "csm_core/core.h"
+#include "handrail/core.h"
 
 //#include "generated/asset_data.c"
 #include "generated/asset_handles.c"
@@ -34,8 +34,43 @@
 // WINDOWS
 #if PLATFORM == PLATFORM_WINDOWS
 
+typedef struct {
+    i32 tmp;
+} Context;
+
+LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch(uMsg) {
+        default: break;
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
-	MessageBox(NULL, "CLick OK to exit the program.", "Application Exit", MB_OK | MB_ICONINFORMATION);
+    // Create window
+    // NOW: define window_proc
+    WNDCLASS window_class = {};
+    window_class.lpfnWndProc   = window_proc;
+    window_class.hInstance     = hInstance;
+    window_class.lpszClassName = GAME_NAME;
+    RegisterClass(&window_class);
+
+    HWND hwnd = CreateWindowEx(
+        0, GAME_NAME, GAME_NAME,
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        NULL, NULL, hInstance, NULL);
+    if(hwnd == NULL) {
+        return 0;
+    }
+
+    ShowWindow(hwnd, nCmdShow);
+
+    // Main loop
+    MSG msg = {};
+    while(GetMessage(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    
 	return 0;
 }
 
