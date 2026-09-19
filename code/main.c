@@ -46,6 +46,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
+    // Allocate memory
+    void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
+    Context* context = (Context*)stack_alloc(&root_stack, sizeof(Context));
+    memset(context, 0, sizeof(Context));
+    Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
+    Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
+    Stack render_frame_stack   = stack_from_stack(&root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
+    Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
+
     // Create window
     // NOW: define window_proc
     WNDCLASS window_class = {};
@@ -61,9 +71,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     if(hwnd == NULL) {
         return 0;
     }
-
     ShowWindow(hwnd, nCmdShow);
 
+    // NOW: OpenGL, Audio, Input, Game DLL, Update
+     
     // Main loop
     MSG msg = {};
     while(GetMessage(&msg, NULL, 0, 0) > 0) {
