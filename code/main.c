@@ -1,5 +1,5 @@
 #define CSM_IMPLEMENTATION
-#define CSM_INCLUDE_GL
+#define HANDRAIL_INCLUDE_VULKAN
 #define BUFFER_DEBUG true
 #define BUFFER_VERBOSE false
 #include "handrail/core.h"
@@ -8,7 +8,7 @@
 #include "generated/asset_handles.c"
 
 // render.c is provided by the specific game
-#include "render.c"
+//#include "render.c"
 
 // Memory sizes
 #ifndef GAME_STACK_SIZE
@@ -35,10 +35,23 @@
 #if PLATFORM == PLATFORM_WINDOWS
 
 typedef struct {
-    i32 tmp;
+    Stack root_stack;
+    Stack game_stack;
+    Stack render_stack;
+    Stack render_frame_stack;
+    Stack platform_frame_stack;
 } Context;
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    Context* context = NULL;
+    if (uMsg == WM_CREATE) {
+        CREATESTRUCT* create = (CREATESTRUCT*)lParam;
+        context = (Context*)create->lpCreateParams;
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)context);
+    } else {
+        context = (Context*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    }
+
     switch(uMsg) {
         default: break;
     }
@@ -46,18 +59,24 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
+    // Console logging
+    assert(AllocConsole());
+    FILE* f;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+    freopen_s(&f, "CONOUT$", "w", stderr);
+    freopen_s(&f, "CONIN$", "r", stdin);
+    
     // Allocate memory
+    Context context = {};
     void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
-    Context* context = (Context*)stack_alloc(&root_stack, sizeof(Context));
-    memset(context, 0, sizeof(Context));
-    Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
-    Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
-    Stack render_frame_stack   = stack_from_stack(&root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
-    Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
+    assert(mem);
+    context.root_stack           = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
+    context.game_stack           = stack_from_stack(&context.root_stack, GAME_STACK_SIZE, string_const("Game"));
+    context.render_stack         = stack_from_stack(&context.root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
+    context.render_frame_stack   = stack_from_stack(&context.root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
+    context.platform_frame_stack = stack_from_stack(&context.root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
 
     // Create window
-    // NOW: define window_proc
     WNDCLASS window_class = {};
     window_class.lpfnWndProc   = window_proc;
     window_class.hInstance     = hInstance;
@@ -67,13 +86,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     HWND hwnd = CreateWindowEx(
         0, GAME_NAME, GAME_NAME,
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-        NULL, NULL, hInstance, NULL);
-    if(hwnd == NULL) {
-        return 0;
-    }
+        NULL, NULL, hInstance, &context);
+    assert(hwnd);
     ShowWindow(hwnd, nCmdShow);
 
-    // NOW: OpenGL, Audio, Input, Game DLL, Update
+    // NOW: Vulkan, Audio, Input, Game DLL, Update
+    vk_init(GAME_NAME, &context.platform_frame_stack);
      
     // Main loop
     MSG msg = {};
@@ -110,7 +128,7 @@ typedef struct {
     Display*            display;
     Window              window;
     snd_pcm_t*          alsa_pcm;
-    u32                 alsa_latency_samples;
+    u32                 alsaLatencySamples;
     Platform            platform;
 
     DynamicLibrary      game;

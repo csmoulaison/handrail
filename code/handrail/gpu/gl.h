@@ -1,7 +1,7 @@
 #ifndef handrail_gl_h_INCLUDED
 #define handrail_gl_h_INCLUDED
 
-#ifndef __EMSCRIPTEN__
+#if PLATFORM == PLATFORM_WINDOWS || PLATFORM == PLATFORM_LINUX
 #include "GL/gl3w.h"
 #endif
 

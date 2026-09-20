@@ -1,6 +1,8 @@
 #ifndef handrail_stack_h_INCLUDED
 #define handrail_stack_h_INCLUDED
 
+#define STACK_ARRAY(pointer_to_stack, type, count) (type*)stack_alloc(pointer_to_stack, count * sizeof(type))
+
 typedef struct {
     union {
         Buffer buffer;

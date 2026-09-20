@@ -63,8 +63,12 @@ typedef size_t   usize;
 #include "handrail/file.h"
 #include "handrail/math.h"
 
-#ifdef CSM_INCLUDE_GL
+#ifdef HANDRAIL_INCLUDE_GL
 #include "handrail/gpu/gl.h"
+#endif
+
+#ifdef HANDRAIL_INCLUDE_VULKAN
+#include "handrail/gpu/vk.h"
 #endif
 
 #include "handrail/platform.h"
