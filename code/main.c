@@ -30,9 +30,19 @@
 #ifndef AUDIO_SAMPLE_RATE
 #define AUDIO_SAMPLE_RATE 44100
 #endif
+#ifndef AUDIO_BITS_PER_SAMPLE
+#define AUDIO_BITS_PER_SAMPLE 32
+#endif
+#ifndef AUDIO_CHANNEL_COUNT
+#define AUDIO_CHANNEL_COUNT 1
+#endif
 
 // WINDOWS
 #if PLATFORM == PLATFORM_WINDOWS
+
+#include <initguid.h>
+#include <audioclient.h>
+#include <mmdeviceapi.h>
 
 typedef struct {
     Stack root_stack;
@@ -40,6 +50,8 @@ typedef struct {
     Stack render_stack;
     Stack render_frame_stack;
     Stack platform_frame_stack;
+
+    WAVEFORMATEX* buffer_format;    
 } Context;
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -58,23 +70,22 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
+void win_init(Context* context, HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
     // Console logging
     assert(AllocConsole());
     FILE* f;
     freopen_s(&f, "CONOUT$", "w", stdout);
     freopen_s(&f, "CONOUT$", "w", stderr);
-    freopen_s(&f, "CONIN$", "r", stdin);
+    freopen_s(&f, "CONIN$",  "r", stdin);
     
     // Allocate memory
-    Context context = {};
     void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     assert(mem);
-    context.root_stack           = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
-    context.game_stack           = stack_from_stack(&context.root_stack, GAME_STACK_SIZE, string_const("Game"));
-    context.render_stack         = stack_from_stack(&context.root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
-    context.render_frame_stack   = stack_from_stack(&context.root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
-    context.platform_frame_stack = stack_from_stack(&context.root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
+    context->root_stack           = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
+    context->game_stack           = stack_from_stack(&context->root_stack, GAME_STACK_SIZE, string_const("Game"));
+    context->render_stack         = stack_from_stack(&context->root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
+    context->render_frame_stack   = stack_from_stack(&context->root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
+    context->platform_frame_stack = stack_from_stack(&context->root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
 
     // Create window
     WNDCLASS window_class = {};
@@ -86,14 +97,41 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     HWND hwnd = CreateWindowEx(
         0, GAME_NAME, GAME_NAME,
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-        NULL, NULL, hInstance, &context);
+        NULL, NULL, hInstance, context);
     assert(hwnd);
     ShowWindow(hwnd, nCmdShow);
 
     // NOW: Vulkan, Audio, Input, Game DLL, Update
-    vk_init(GAME_NAME, &context.platform_frame_stack);
-     
-    // Main loop
+    vk_init(GAME_NAME, &context->platform_frame_stack);
+
+    // WASAPI audio
+    // TODO: second arg here, look into.
+    assert(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED) == 0);
+
+    // Enumerate playback devices and choose default
+    IMMDeviceEnumerator* enumerator = {};
+    assert(CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (LPVOID*)&enumerator) == 0);
+    IMMDevice* device = {};
+    assert(IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device) == 0);
+    IMMDeviceEnumerator_Release(enumerator);
+    
+    //WAVEFORMATEX wave_format = {};
+    //wave_format.wFormatTag      = WAVE_FORMAT_IEEE_FLOAT;
+    //wave_format.nChannels       = AUDIO_CHANNEL_COUNT;
+    //wave_format.nSamplesPerSec  = AUDIO_SAMPLE_RATE;
+    //wave_format.nBlockAlign     = AUDIO_CHANNEL_COUNT * (AUDIO_BITS_PER_SAMPLE / 8);
+    //wave_format.nAvgBytesPerSec = AUDIO_SAMPLE_RATE * wave_format.nBlockAlign;
+    //wave_format.wBitsPerSample  = AUDIO_BITS_PER_SAMPLE;
+    //wave_format.cbSize          = 0;
+
+}
+
+i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
+    // Init 
+    Context context = {};
+    win_init(&context, hInstance, hPrevInstance, lpCmdLine, nCmdShow);
+
+    // Loop
     MSG msg = {};
     while(GetMessage(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);

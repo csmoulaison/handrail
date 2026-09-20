@@ -67,7 +67,7 @@ function Static {
         $FLAGS `
 		/D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.so\"' `
 		/nologo `
-		/link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib opengl32.lib handrail\extern\libs\vulkan-1.lib
+		/link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib uuid.lib mmdevapi.lib opengl32.lib handrail\extern\libs\vulkan-1.lib 
     End-Step
 }
 
