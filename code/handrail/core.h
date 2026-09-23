@@ -35,6 +35,9 @@ typedef size_t   usize;
 #ifdef _MSC_VER
 #define PLATFORM PLATFORM_WINDOWS
 #include <malloc.h>
+#define COBJMACROS
+#define WIN32_LEAN_AND_MEAN
+#include <initguid.h>
 #include <windows.h>
 #endif
 
@@ -84,5 +87,6 @@ typedef size_t   usize;
 #include "handrail/media/blender.h"
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
+#include "handrail/media/pcm.h"
 
 #endif

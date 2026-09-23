@@ -46,6 +46,7 @@ static inline f32  f32_move_to_zero(f32 value, f32 amount);
 static inline f32  f32_lerp(f32 a, f32 b, f32 t);
 static inline f32  f32_smoothstep(f32 n);
 static inline f32  f32_smootherstep(f32 n);
+static inline u32  u32_round_up_to_power_of_2(u32 value);
 static inline i32  true_mod(i32 a, i32 b);
 // IVector2
 static inline iv2  iv2_new(i32 x, i32 y);
@@ -157,6 +158,13 @@ static inline f32 f32_smoothstep(f32 n) {
 
 static inline f32 f32_smootherstep(f32 n) {
     return n * n / (2.0 * n * n - 2.0 * n + 1.0);
+}
+
+static inline u32 u32_round_up_to_power_of_2(u32 value) {
+		unsigned long index;
+		_BitScanReverse(&index, value - 1);
+		assert(index < 31);
+		return 1U << (index + 1);
 }
 
 static inline i32 true_mod(i32 a, i32 b) {

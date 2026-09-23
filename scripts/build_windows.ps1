@@ -56,7 +56,11 @@ function Static {
     prebuild
 
     Start-Step "Static (asset resource)"
-	#NOW: generate or link or something asset pack
+	# NOW: generate or link or something asset pack
+	# I am thinking that we go to the binobj github repo or some other resource and
+	# just do the damn conversion ourselves. Put it in prebuild. That also unifies
+	# the approaches of the Linux and Windows versions unless making objects files
+	# in Unix is a bunch more complicated for some reason.
     End-Step
 
     Start-Step "Static (build)"
@@ -67,7 +71,7 @@ function Static {
         $FLAGS `
 		/D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.so\"' `
 		/nologo `
-		/link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib uuid.lib mmdevapi.lib opengl32.lib handrail\extern\libs\vulkan-1.lib 
+		/link /SUBSYSTEM:WINDOWS kernel32.lib mincore.lib user32.lib gdi32.lib ole32.lib avrt.lib onecore.lib uuid.lib mmdevapi.lib opengl32.lib handrail\extern\libs\vulkan-1.lib 
     End-Step
 }
 
