@@ -3,7 +3,7 @@
 
 // Undef any of these to allow for multiple types in the same project
 #ifndef PCM_CHANNEL_COUNT
-#define PCM_CHANNEL_COUNT 2
+#define PCM_CHANNEL_COUNT 1
 #endif
 #ifndef PCM_BITS_PER_SAMPLE
 #define PCM_BITS_PER_SAMPLE 16
@@ -50,6 +50,7 @@ typedef struct {
     u32 sample_rate;
 #endif
     u64 buffer_size;
+    u64 sample_count;
     u8  sample_buffer[];    
 } PcmClip;
 
@@ -60,13 +61,17 @@ u64      pcm_clip_size(PcmClip* pcm);
 #ifdef CSM_IMPLEMENTATION
 
 PcmClip* pcm_clip_from_wav(String path, Stack* stack) {
+    assert(sizeof(WavHeader) == 44);
+
     WavHeader header = {};
     File file = file_open(path, FILE_OPEN_READ);
+    printf("before BEFORE read ftell %u\n", ftell(file.handle));
     file_read(&file, &header, sizeof(WavHeader));
+    printf("before read ftell %u\n", ftell(file.handle));
     assert(strncmp(header.riff_header, "RIFF", 4) == 0);
     assert(strncmp(header.wave_header, "WAVE", 4) == 0);
     assert(strncmp(header.fmt_header,  "fmt ", 3) == 0);
-    //assert(strncmp(header.data_header, "data", 4) == 0);
+    assert(strncmp(header.data_header, "data", 4) == 0);
 
     printf("pcm chunk size %u\n", header.format_chunk_size);
     printf("pcm format %u\n", header.audio_format);
@@ -77,6 +82,7 @@ PcmClip* pcm_clip_from_wav(String path, Stack* stack) {
 
     PcmClip* clip = (PcmClip*)stack_alloc(stack, pcm_clip_size_from_buffer_size(header.data_size));
     clip->buffer_size = header.data_size;
+    clip->sample_count = header.data_size / (header.bits_per_sample / 8);
 
     #ifdef PCM_CHANNEL_COUNT
     assert(header.channel_count == PCM_CHANNEL_COUNT);
@@ -96,7 +102,7 @@ PcmClip* pcm_clip_from_wav(String path, Stack* stack) {
     clip->sample_rate = header.sample_rate;
     #endif
 
-    file_read(&file, clip->sample_buffer, header.data_size);
+    assert(file_read(&file, clip->sample_buffer, header.data_size) != 0);
     file_close(&file);
     return clip;
 }

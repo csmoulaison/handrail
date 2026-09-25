@@ -27,11 +27,11 @@ typedef struct {
     u32       types_len;
 } AssetBuilder;
 
-void asset_builder_init(AssetBuilder* builder, Stack* stack);
+void  asset_builder_init(AssetBuilder* builder, Stack* stack);
 void* asset_builder_push_asset(AssetBuilder* builder, String tag, String type_name, String struct_name, void* data, u64 size);
-u64  asset_builder_next_handle_of_type(AssetBuilder* builder, String type_name);
-void asset_builder_output_pack(AssetBuilder* builder, String path);
-void asset_builder_output_source(AssetBuilder* builder, String handles_path, String data_path);
+u64   asset_builder_next_handle_of_type(AssetBuilder* builder, String type_name);
+void  asset_builder_output_pack(AssetBuilder* builder, String output_path, String symbol_name);
+void  asset_builder_output_source(AssetBuilder* builder, String handles_path, String data_path);
 
 #ifdef CSM_IMPLEMENTATION
 
@@ -84,12 +84,11 @@ u64 asset_builder_next_handle_of_type(AssetBuilder* builder, String type_name) {
     return type_count + 1;
 }
 
-void asset_builder_output_pack(AssetBuilder* builder, String path) {
-    File file = file_open(path, FILE_OPEN_WRITE);
-    file_write(&file, builder->stack->memory, builder->stack->head);
-    file_close(&file);
+void asset_builder_output_pack(AssetBuilder* builder, String output_path, String symbol_name) {
 #if PLATFORM == PLATFORM_WINDOWS
-	// NOW: Create assets.rc file
+    coff_output_binary_object(builder->stack->memory, builder->stack->head, output_path, symbol_name);
+#elif PLATFORM == PLATFORM_LINUX
+    elf_output_binary_object(builder->stack->memory, builder->stack->head, output_path, symbol_name);
 #endif
 }
 
@@ -167,11 +166,9 @@ void asset_builder_output_source(AssetBuilder* builder, String handles_path, Str
     file_print_uint(&file, builder->stack->head);
     file_write_string(&file, string_const("];\n"));
     file_write_string(&file, string_const("\n#else\n\n"));
-    file_write_string(&file, string_const("extern char _binary_build_asset_pack_data_start[];\n"));
-    file_write_string(&file, string_const("extern char _binary_build_asset_pack_data_end[];\n"));
-    file_write_string(&file, string_const("extern char _binary_build_asset_pack_data_size[];\n"));
+    file_write_string(&file, string_const("extern char assets[];\n"));
     file_write_string(&file, string_const("\n#endif\n"));
-    file_write_string(&file, string_const("char* asset_pack_data = _binary_build_asset_pack_data_start;\n"));
+    file_write_string(&file, string_const("char* asset_pack_data = assets;\n"));
     file_close(&file);
 }
 

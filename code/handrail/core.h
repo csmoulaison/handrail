@@ -78,6 +78,7 @@ typedef size_t   usize;
 #include "handrail/fiedler.h"
 #include "handrail/dynamic_library.h"
 #include "handrail/game.h"
+#include "handrail/coff.h"
 
 #include "handrail/media/asset_builder.h"
 #include "handrail/media/mesh.h"

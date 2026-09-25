@@ -20,14 +20,14 @@ u64 file_path_last_modified(String path);
 String* file_names_in_directory(String path, i32* out_path_count, Stack* stack);
 String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack);
 
-void file_write(File* file, void* data, u64 len);
+void file_write(File* file, void* data, u64 size);
 void file_write_char(File* file, char c);
 void file_write_string(File* file, String string);
 void file_print_uint(File* file, u64 n);
 void file_print_int(File* file, i64 n);
 void file_print_float(File* file, f64 n);
 
-u64  file_read(File* file, void* dst, u64 len);
+u64  file_read(File* file, void* dst, u64 size);
 u64  file_read_all(File* file, void* dst, u64 dst_size);
 char file_read_char(File* file);
 // dst can be NULL in these string related functions.
@@ -55,19 +55,20 @@ File file_open(String fname, FileOpenMode mode) {
 
 bool file_try_open(String fname, FileOpenMode mode, File* out) {
     FILE* handle;
-	char* buf = alloca(fname.len + 1);
+    char* buf = alloca(fname.len + 1);
     String fname_cstring = string_init(buf, fname.len+1);
     string_cat(&fname_cstring, fname);
     string_write_null_terminator(&fname_cstring);
     switch(mode) {
+        // NOW: yo, theres a binary and a text mode
         case FILE_OPEN_READ: {
-            handle = fopen(fname_cstring.text, "r");
+            handle = fopen(fname_cstring.text, "rb");
         } break;
         case FILE_OPEN_WRITE: {
-            handle = fopen(fname_cstring.text, "w");
+            handle = fopen(fname_cstring.text, "wb");
         } break;
         case FILE_OPEN_READ_WRITE: {
-            handle = fopen(fname_cstring.text, "rw");
+            handle = fopen(fname_cstring.text, "rwb");
         } break;
         default: {
             fprintf(stderr, "File open mode %i not valid.", mode);
@@ -194,8 +195,8 @@ String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack) 
 #endif
 }
 
-void file_write(File* file, void* data, u64 len) {
-    fwrite(data, len, 1, file->handle);
+void file_write(File* file, void* data, u64 size) {
+    fwrite(data, size, 1, file->handle);
 }
 
 void file_write_char(File* file, char c) {
@@ -218,8 +219,8 @@ void file_print_float(File* file, f64 n) {
     fprintf(file->handle, "%lf", n);
 }
 
-u64 file_read(File* file, void* dst, u64 len) {
-    return fread(dst, len, 1, file->handle);
+u64 file_read(File* file, void* dst, u64 size) {
+    return fread(dst, size, 1, file->handle);
 }
 
 u64 file_read_all(File* file, void* dst, u64 dst_size) {

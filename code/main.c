@@ -4,7 +4,7 @@
 #define BUFFER_VERBOSE false
 #include "handrail/core.h"
 
-//#include "generated/asset_data.c"
+#include "generated/asset_data.c"
 #include "generated/asset_handles.c"
 
 // render.c is provided by the specific game
@@ -340,6 +340,10 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     // TMP: sine wave t
     f64 sin_t = 0.0;
 
+    i32 pcm_index = 0;
+    PcmClip* clip = pcm_asset(asset_pack_data, PCM_FUR_ELISE);
+    i16* pcm_buffer = (i16*)clip->sample_buffer;
+
     // Loop
     while(!context.quit_requested) {
         // Event handling
@@ -385,22 +389,21 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
         // Write 100ms or available space, whichever is smaller. Tune this
         // number to the max update time, otherwise audio will have
         // discontinuities
-        u64 sample_count = min(AUDIO_SAMPLE_RATE / 10, audio->sample_count);
-        if(sample_count > 0) {
-            // Allocate temporary sample buffer or use the Wasapi one directly?
-            //f32* sample_buffer = (f32*)stack_alloc(&platform_frame_stack, sample_count);
-            f32* sample_buffer = (f32*)audio->buffer;
+        u64 sample_count = min(AUDIO_SAMPLE_RATE / 5, audio->sample_count);
+        sample_count = audio->play_samples;
+        // Allocate temporary sample buffer or use the Wasapi one directly?
+        //f32* sample_buffer = (f32*)stack_alloc(&platform_frame_stack, sample_count);
+        f32* sample_buffer = (f32*)audio->buffer;
 
-            // TODO: game layer callback
-            //context->game_audio_callback(game_stack.memory, audio->sample_buffer, sample_count);
+        // TODO: game layer callback
+        //context->game_audio_callback(game_stack.memory, audio->sample_buffer, sample_count);
 
-            // TMP: fill with sine wave with magic frequency number 
-            f64 delta = (400.0 * (M_PI * 2)) / (double)AUDIO_SAMPLE_RATE;
-            for(i32 i = 0; i < sample_count; i++) {
-                sample_buffer[i * 2] = sin(sin_t) * 0.5;
-                //audio->sample_buffer[i * 2 + 1] = sin(sin_t) * 0.1;
-                sin_t += delta;
-            }
+        // TMP: fill with sine wave with magic frequency number 
+        f64 delta = (400.0 * (M_PI * 2)) / (double)AUDIO_SAMPLE_RATE;
+        for(i32 i = 0; i < sample_count; i++) {
+            sample_buffer[i] = 0.5 * ((f32)pcm_buffer[pcm_index] / (f32)INT16_MAX);
+            pcm_index = (pcm_index + 1) % clip->sample_count;
+            sin_t += delta;
         }
 
         // Unlock the buffer
