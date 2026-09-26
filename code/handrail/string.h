@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <limits.h>
 
-typedef struct {
+typedef struct String {
     char* text;
     u64 capacity;
     u64 len;

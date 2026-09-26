@@ -11,7 +11,8 @@
 #define panic() do { printf("Panic at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } while(0)
 
 #undef assert
-#define assert(assertion) do { if(!(assertion)) { printf("Assertion failed at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } } while(0)
+//#define assert(assertion) do { if(!(assertion)) { printf("Assertion failed at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } } while(0)
+#define assert(assertion) do { if(!(assertion)) { log_err("Assertion failed\n"); print_callstack(); exit(1); } } while(0)
 
 #if DEBUG_ASSERTIONS
 	#define debug_assert(assertion) assert(assertion)

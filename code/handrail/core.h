@@ -57,9 +57,9 @@ typedef size_t   usize;
 #define MEGABYTE 1000000
 #define GIGABYTE 1000000000
 
+#include "handrail/log.h"
 #include "handrail/assert.h"
 #include "handrail/string.h"
-#include "handrail/log.h"
 #include "handrail/buffer.h"
 #include "handrail/stack.h"
 #include "handrail/random.h"

@@ -37,10 +37,11 @@
 #define AUDIO_BITS_PER_SAMPLE 32
 #endif
 #ifndef AUDIO_CHANNEL_COUNT
-#define AUDIO_CHANNEL_COUNT 1
+#define AUDIO_CHANNEL_COUNT 2
 #endif
 
 #define AUDIO_BYTES_PER_SAMPLE (AUDIO_BITS_PER_SAMPLE / 8)
+#define AUDIO_BYTES_PER_FRAME  (AUDIO_BYTES_PER_SAMPLE * AUDIO_CHANNEL_COUNT)
 
 // WINDOWS
 #if PLATFORM == PLATFORM_WINDOWS
@@ -57,7 +58,7 @@ DEFINE_GUID(IID_IAudioClient,         0x1cb9ad4c, 0xdbfa, 0x4c32, 0xb1, 0x78, 0x
 DEFINE_GUID(IID_IAudioClient3,        0x7ed4ee07, 0x8e67, 0x4cd4, 0x8c, 0x1a, 0x2b, 0x7a, 0x59, 0x87, 0xad, 0x42);
 DEFINE_GUID(IID_IAudioRenderClient,   0xf294acfc, 0x3146, 0x4483, 0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2);
 
-#define HR_VERIFY(statement) { HRESULT hr_res = 0; if((hr_res = (statement)) != 0) { printf("ERROR!!\n"); print_hresult_string(hr_res); exit(1); } }
+#define HR_VERIFY(statement) { HRESULT hr_res = 0; if((hr_res = (statement)) != 0) { print_hresult_string(hr_res); exit(1); } }
 
 typedef struct {
     WAVEFORMATEX* format;    
@@ -114,9 +115,10 @@ void print_hresult_string(HRESULT res) {
         4096,
         NULL);
     if(size == 0) {
-        printf("Couldn't get HRESULT string\n");
+        log_err("Couldn't get HRESULT string\n");
     }
-    printf("HRESULT %s\n", str);
+    log_err(str);
+    log_msg("\n");
     return;
 }
 
@@ -176,22 +178,22 @@ static DWORD CALLBACK wasapi_audio_thread(LPVOID arg) {
         // write: samples/bytes to write to buffer
         AcquireSRWLockExclusive(&audio->lock);
         u32 available_size = audio->write_offset - audio->read_offset;
-        u32 available_samples = available_size / AUDIO_BYTES_PER_SAMPLE;
-        u32 write_samples = min(available_samples, max_output_samples);
-        u32 write_size = write_samples * AUDIO_BYTES_PER_SAMPLE;
+        u32 available_frames = available_size / AUDIO_BYTES_PER_FRAME;
+        u32 write_frames = min(available_frames, max_output_samples);
+        u32 write_size = write_frames * AUDIO_BYTES_PER_FRAME;
         audio->lock_offset = audio->read_offset + write_size;
         DWORD flags = 0;
-        if(write_samples == 0) {
-            // Write silence if no write samples
-            write_samples = max_output_samples;
+        if(write_frames == 0) {
+            // Write silence if no write frames
+            write_frames = max_output_samples;
             flags = AUDCLNT_BUFFERFLAGS_SILENT;
         }
-        audio->used += write_samples;
+        audio->used += write_frames;
         ReleaseSRWLockExclusive(&audio->lock);
 
         memcpy(output, audio->buffer_1 + (audio->read_offset & buffer_mask), write_size);
         InterlockedAdd(&audio->read_offset, write_size);
-        HR_VERIFY(IAudioRenderClient_ReleaseBuffer(playback, write_samples, flags));
+        HR_VERIFY(IAudioRenderClient_ReleaseBuffer(playback, write_frames, flags));
     }
 
     HR_VERIFY(IAudioClient_Stop(audio->client));
@@ -201,13 +203,16 @@ static DWORD CALLBACK wasapi_audio_thread(LPVOID arg) {
 }
 
 void win_init(Context* context, HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
-    // Console logging
+    log_init(); 
+
+    // Logging, including spawning a console window
     assert(AllocConsole());
     FILE* f;
     freopen_s(&f, "CONOUT$", "w", stdout);
     freopen_s(&f, "CONOUT$", "w", stderr);
     freopen_s(&f, "CONIN$",  "r", stdin);
-    
+    log_init();
+
     // Allocate memory
     void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     assert(mem);
@@ -389,25 +394,20 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
         // Write 100ms or available space, whichever is smaller. Tune this
         // number to the max update time, otherwise audio will have
         // discontinuities
-        u64 sample_count = min(AUDIO_SAMPLE_RATE / 5, audio->sample_count);
-        sample_count = audio->play_samples;
-        // Allocate temporary sample buffer or use the Wasapi one directly?
-        //f32* sample_buffer = (f32*)stack_alloc(&platform_frame_stack, sample_count);
+        u64 frame_count = min(AUDIO_SAMPLE_RATE / 5, audio->sample_count);
+        frame_count = audio->play_samples;
         f32* sample_buffer = (f32*)audio->buffer;
-
-        // TODO: game layer callback
-        //context->game_audio_callback(game_stack.memory, audio->sample_buffer, sample_count);
-
         // TMP: fill with sine wave with magic frequency number 
-        f64 delta = (400.0 * (M_PI * 2)) / (double)AUDIO_SAMPLE_RATE;
-        for(i32 i = 0; i < sample_count; i++) {
+        for(i32 i = 0; i < frame_count * 2; i++) {
             sample_buffer[i] = 0.5 * ((f32)pcm_buffer[pcm_index] / (f32)INT16_MAX);
             pcm_index = (pcm_index + 1) % clip->sample_count;
-            sin_t += delta;
         }
 
+        // TODO: in place of TMP above, game layer callback
+        //context->game_audio_callback(game_stack.memory, audio->sample_buffer, sample_count);
+
         // Unlock the buffer
-        InterlockedAdd(&audio->write_offset, sample_count * AUDIO_BYTES_PER_SAMPLE);
+        InterlockedAdd(&audio->write_offset, frame_count * AUDIO_BYTES_PER_FRAME);
     }
     
 	return 0;
@@ -514,6 +514,8 @@ PlatformKey platform_key_from_xlib_keysym(u32 keysym) {
 }
 
 i32 main(i32 argc, char** argv) {
+    log_init();
+
     // Allocate memory
     void* mem = malloc(ROOT_MEMORY_SIZE);
     Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));

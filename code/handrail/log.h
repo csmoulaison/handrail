@@ -4,25 +4,46 @@
 // TODO: Logging modes, log to files, different logging targets.
 // TOOD: Don't use stdio, do our own string formatting, etc.
 
-void log_msg(String msg);
-void log_err(String msg);
-void log_exit(String msg);
+#define LOG_FILE true
+
+#if LOG_FILE
+FILE* handrail_static_log_file;
+#endif
+
+void log_init();
+void log_msg(char* msg);
+void log_err(char* msg);
+void log_exit(char* msg);
 
 #ifdef CSM_IMPLEMENTATION
 
-void log_msg(String msg) {
-	assert(msg.text[msg.len] == '\0');
-    printf("%s", msg.text);
+void log_init() {
+#if LOG_FILE
+	char fname[128];
+	//sprintf(fname, "log_%u.txt", time(NULL));
+	sprintf(fname, "log.txt");
+	handrail_static_log_file = fopen(fname, "wb");
+#endif
 }
 
-void log_err(String msg) {
-	assert(msg.text[msg.len] == '\0');
-    fprintf(stderr, "error: %s", msg.text);
+void log_msg(char* msg) {
+    printf("%s", msg);
+#if LOG_FILE
+	fprintf(handrail_static_log_file, "%s", msg);
+#endif
 }
 
-void log_exit(String msg) {
+// NOW: figure out if this is firing at all
+void log_err(char* msg) {
+    fprintf(stderr, "error: %s", msg);
+#if LOG_FILE
+	fprintf(handrail_static_log_file, "error: %s", msg);
+#endif
+}
+
+void log_exit(char* msg) {
     log_err(msg);
-	exit(1);
+    exit(1);
 }
 
 #endif

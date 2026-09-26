@@ -3,7 +3,7 @@
 
 // Undef any of these to allow for multiple types in the same project
 #ifndef PCM_CHANNEL_COUNT
-#define PCM_CHANNEL_COUNT 1
+#define PCM_CHANNEL_COUNT 2
 #endif
 #ifndef PCM_BITS_PER_SAMPLE
 #define PCM_BITS_PER_SAMPLE 16
