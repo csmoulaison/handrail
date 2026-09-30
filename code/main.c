@@ -235,10 +235,12 @@ void win_init(Context* context, HINSTANCE hInstance, HINSTANCE hPrevInstance, PS
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
         NULL, NULL, hInstance, context);
     assert(hwnd != NULL);
-    //ShowWindow(hwnd, nCmdShow);
 
-    // NOW: Vulkan, Audio, Input, Game DLL, Update
-    vk_init(GAME_NAME, &context->platform_frame_stack);
+    // Vulkan renderer
+    VkWin32Platform vk_win32 = {};
+    vk_win32.hwnd      = hwnd;
+    vk_win32.hinstance = hInstance;
+    vk_init(GAME_NAME, &vk_win32, &context->platform_frame_stack);
 
     // WASAPI audio
     Wasapi* audio = &context->audio;
@@ -342,9 +344,7 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
     Context context = {};
     win_init(&context, hInstance, hPrevInstance, lpCmdLine, nCmdShow);
 
-    // TMP: sine wave t
-    f64 sin_t = 0.0;
-
+    // TMP: fur elise clip state
     i32 pcm_index = 0;
     PcmClip* clip = pcm_asset(asset_pack_data, PCM_FUR_ELISE);
     i16* pcm_buffer = (i16*)clip->sample_buffer;
@@ -366,6 +366,11 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
         }
 
         // WASAPI audio
+        // TODO: put this into the WASAPI thread itself, both because there's no
+        // reason it needs to be here, and because doing it here means that when
+        // Win32 enters a modal state (i.e. window moving, resizing) we stop
+        // supplying frames to the system, which eventually causes a crash the
+        // way we have it set up now.
         // =====================================================================
         // Lock the buffer
         Wasapi* audio = &context.audio;
@@ -394,7 +399,7 @@ i32 WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
         // Write 100ms or available space, whichever is smaller. Tune this
         // number to the max update time, otherwise audio will have
         // discontinuities
-        u64 frame_count = min(AUDIO_SAMPLE_RATE / 5, audio->sample_count);
+        u64 frame_count = min(AUDIO_SAMPLE_RATE / 10, audio->sample_count);
         frame_count = audio->play_samples;
         f32* sample_buffer = (f32*)audio->buffer;
         // TMP: fill with sine wave with magic frequency number 

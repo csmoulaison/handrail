@@ -2,18 +2,23 @@
 #define handrail_VK_H_INCLUDED
 
 #if PLATFORM == PLATFORM_WINDOWS
-#define VK_USE_PLATFORM_WIN32_KHR 
+#define VK_USE_PLATFORM_WIN32_KHR
 #endif
 #define VK_NO_PROTOTYPES
 #define VOLK_IMPLEMENTATION
 #include <vulkan/vulkan.h>
 #include <volk/volk.h>
 
-void vk_init(char* app_name, Stack* scratch);
+typedef struct {
+    HWND      hwnd;
+    HINSTANCE hinstance;
+} VkWin32Platform;
+
+void vk_init(char* app_name, void* platform_context, Stack* scratch);
 
 #ifdef CSM_IMPLEMENTATION
 
-void vk_init(char* app_name, Stack* scratch) {
+void vk_init(char* app_name, void* platform_context, Stack* scratch) {
     // TODO: replace all instances of this with VK_VERIFY macro
     assert(volkInitialize() == VK_SUCCESS);
 
@@ -56,20 +61,20 @@ void vk_init(char* app_name, Stack* scratch) {
     VkQueueFamilyProperties* queue_families = STACK_ARRAY(scratch, VkQueueFamilyProperties, queue_family_count);
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, queue_families);
 
-    i32 graphics_queue = -1;
+    i32 graphics_queue_family = -1;
     for(i32 i = 0; i < queue_family_count; i++) {
         if(queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT
         && vkGetPhysicalDeviceWin32PresentationSupportKHR(physical_device, i)) {
-            graphics_queue = i;
+            graphics_queue_family = i;
             break;
         }
     }
-    assert(graphics_queue != -1);
+    assert(graphics_queue_family != -1);
 
     f32 graphics_queue_priority = 1.0;
     VkDeviceQueueCreateInfo graphics_queue_info = {};
     graphics_queue_info.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    graphics_queue_info.queueFamilyIndex = graphics_queue;
+    graphics_queue_info.queueFamilyIndex = graphics_queue_family;
     graphics_queue_info.queueCount       = 1;
     graphics_queue_info.pQueuePriorities = &graphics_queue_priority;
 
@@ -106,8 +111,28 @@ void vk_init(char* app_name, Stack* scratch) {
     VkDevice device = {};
     assert(vkCreateDevice(physical_device, &device_info, NULL, &device) == VK_SUCCESS);
 
-    VkQueue queue = {};
-    vkGetDeviceQueue(device, graphics_queue, 0, &queue);
+    VkQueue graphics_queue = {};
+    vkGetDeviceQueue(device, graphics_queue_family, 0, &graphics_queue);
+
+    // Surface
+    VkWin32Platform* win32 = (VkWin32Platform*)platform_context;
+    VkWin32SurfaceCreateInfoKHR surface_info = {};
+    surface_info.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    surface_info.hwnd      = win32->hwnd;
+    surface_info.hinstance = win32->hinstance;
+    VkSurfaceKHR surface = {};
+    assert(vkCreateWin32SurfaceKHR(instance, &surface_info, NULL, &surface) == VK_SUCCESS);
+
+    VkSurfaceCapabilitiesKHR surface_capabilities = {};
+    assert(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &surface_capabilities) == VK_SUCCESS);
+
+    VkExtent2D swapchain_extent = surface_capabilities.current_extent;
+    if(surface_capabilities.current_extent.width == 0xffffffff) {
+        swapchain_extent.width  = window_size.x;
+        swapchain_extent.height = window_size.y;
+    }
+
+    // NOW: Create swapchain.
 }
 
 #endif
