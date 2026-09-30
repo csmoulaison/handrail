@@ -51,7 +51,10 @@ typedef struct {
 
 void platform_push_event(Platform* platform, PlatformEvent event);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_platform_h_IMPLEMENTED)
+#define handrail_platform_h_IMPLEMENTED
 
 void platform_push_event(Platform* platform, PlatformEvent event) {
     assert(platform->events_len < PLATFORM_MAX_EVENTS_PER_FRAME);
@@ -59,5 +62,4 @@ void platform_push_event(Platform* platform, PlatformEvent event) {
     platform->events_len++;
 }
 
-#endif
 #endif

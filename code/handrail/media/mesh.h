@@ -49,7 +49,10 @@ f32 primitive_2d_quad_vertices[PRIMITIVE_2D_QUAD_VERTICES_LEN * 2] = {
     -1.0,  1.0
 };
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_mesh_h_IMPLEMENTED)
+#define handrail_mesh_h_IMPLEMENTED
 
 typedef struct {
     union {
@@ -207,5 +210,4 @@ u64 primitive_2d_size(Primitive2dData* primitive) {
     return primitive_2d_size_from_info(primitive->vertices_len);
 }
 
-#endif
 #endif

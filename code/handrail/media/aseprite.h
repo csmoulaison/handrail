@@ -60,7 +60,10 @@ AsepriteData textures_from_aseprite(String path, String tag, String bmp_dir, Sta
 void         aseprite_to_sprite_atlas(String path, String tag, String bmp_dir, SpriteAtlasBuilder* atlas, Stack* stack);
 void         aseprite_directory_to_sprite_atlas(String aseprite_dir, String bmp_dir, SpriteAtlasBuilder* atlas, Stack* stack);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_aseprite_h_IMPLEMENTED)
+#define handrail_aseprite_h_IMPLEMENTED
 
 AsepriteData textures_from_aseprite(String path, String tag, String bmp_dir, Stack* stack) {
     assert(sizeof(AsepriteHeader) == 128);
@@ -135,5 +138,4 @@ void aseprite_directory_to_sprite_atlas(String aseprite_dir, String bmp_dir, Spr
     }
 }
 
-#endif
 #endif

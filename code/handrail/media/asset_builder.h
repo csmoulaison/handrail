@@ -33,7 +33,10 @@ u64  asset_builder_next_handle_of_type(AssetBuilder* builder, String type_name);
 void asset_builder_output_pack(AssetBuilder* builder, String path);
 void asset_builder_output_source(AssetBuilder* builder, String handles_path, String data_path);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_asset_pack_h_IMPLEMENTED)
+#define handrail_asset_pack_h_IMPLEMENTED
 
 void asset_builder_init(AssetBuilder* builder, Stack* stack) {
     builder->stack = stack;
@@ -175,5 +178,4 @@ void asset_builder_output_source(AssetBuilder* builder, String handles_path, Str
     file_close(&file);
 }
 
-#endif
 #endif

@@ -113,7 +113,10 @@ void m4_from_quat(f32* q, f32* res);
 void quat_mult(f32* r, f32* s, f32* res);
 void quat_inverse(f32* q, f32* res);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_math_h_IMPLEMENTED)
+#define handrail_math_h_IMPLEMENTED
 
 static inline bool f32_within_epsilon(f32 a, f32 b, f32 e) {
     return (fabs(a - b) <= e);
@@ -565,5 +568,4 @@ void quat_inverse(f32* q, f32* res) {
     res[3] = -q[3];
 }
 
-#endif
 #endif

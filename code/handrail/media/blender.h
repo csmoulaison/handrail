@@ -40,7 +40,10 @@ char blender_export_bmp_python[] =
 void blender_export_obj(String blend_path, String obj_path);
 void blender_export_bmp(String blend_path, String bmp_path, String img_name);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_blender_h_IMPLEMENTED)
+#define handrail_blender_h_IMPLEMENTED
 
 void blender_export_obj(String blend_path, String obj_path) {
     File py_file = file_open(string_const("build/obj_tmp.py"), FILE_OPEN_WRITE);
@@ -69,5 +72,4 @@ void blender_export_bmp(String blend_path, String bmp_path, String img_name) {
     system(blender_cmd.text);
 }
 
-#endif
 #endif

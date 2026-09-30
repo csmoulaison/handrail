@@ -37,7 +37,10 @@ typedef struct {
 FontAndTextureData font_and_texture_from_ttf(char* path, u32 point_size, u32 texture_handle, Stack* stack);
 #endif
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_font_h_IMPLEMENTED)
+#define handrail_font_h_IMPLEMENTED
 
 v4 font_glyph_src(FontData* font, FontGlyph* glyph) {
     return v4_new(
@@ -179,6 +182,5 @@ try_pack_again:
     return data;
 }
 
-#endif
 #endif
 #endif

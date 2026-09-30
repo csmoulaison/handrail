@@ -54,6 +54,15 @@ typedef size_t   usize;
 #define MEGABYTE 1000000
 #define GIGABYTE 1000000000
 
+// Core types used by pointer across headers, declared up front so headers
+// don't depend on each other's include order for them.
+typedef struct Buffer Buffer;
+typedef struct Stack  Stack;
+
+// Headers are included twice. The first pass declares types, prototypes, and
+// macros. The second pass compiles implementations, so every implementation
+// can use anything from any header. Include order only matters for types
+// that contain other types by value.
 #include "handrail/assert.h"
 #include "handrail/string.h"
 #include "handrail/buffer.h"
@@ -80,5 +89,35 @@ typedef size_t   usize;
 #include "handrail/media/blender.h"
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
+
+#ifdef CSM_IMPLEMENTATION
+#define HANDRAIL_IMPLEMENTATION_PASS
+#include "handrail/assert.h"
+#include "handrail/string.h"
+#include "handrail/buffer.h"
+#include "handrail/stack.h"
+#include "handrail/random.h"
+#include "handrail/file.h"
+#include "handrail/log.h"
+#include "handrail/math.h"
+
+#ifdef CSM_INCLUDE_GL
+#include "handrail/gpu/gl.h"
+#endif
+
+#include "handrail/platform.h"
+#include "handrail/fiedler.h"
+#include "handrail/dynamic_library.h"
+#include "handrail/game.h"
+
+#include "handrail/media/asset_builder.h"
+#include "handrail/media/mesh.h"
+#include "handrail/media/texture.h"
+#include "handrail/media/sprite.h"
+#include "handrail/media/aseprite.h"
+#include "handrail/media/blender.h"
+#include "handrail/media/synth.h"
+#include "handrail/media/font.h"
+#endif
 
 #endif

@@ -51,7 +51,10 @@ void           gl_clear_color(v4 clear_color);
 void           gl_clear_color_and_depth(v4 clear_color);
 void           gl_viewport(i32 x, i32 y, i32 w, i32 h);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_gl_h_IMPLEMENTED)
+#define handrail_gl_h_IMPLEMENTED
 
 // PRIVATE FUNCTIONS
 void gl_init_buffer(u32* id, u64 size, GLenum target, GLenum usage) {
@@ -268,5 +271,4 @@ void gl_clear_color_and_depth(v4 clear_color) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-#endif
 #endif

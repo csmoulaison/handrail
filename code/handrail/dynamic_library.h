@@ -11,7 +11,10 @@ void  dynamic_library_init(DynamicLibrary* lib, String path);
 bool  dynamic_library_update(DynamicLibrary* lib);
 void* dynamic_library_load_function(DynamicLibrary lib, String name);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_dynamic_library_h_IMPLEMENTED)
+#define handrail_dynamic_library_h_IMPLEMENTED
 
 void dynamic_library_init(DynamicLibrary* lib, String path) {
     lib->handle = NULL;
@@ -98,5 +101,4 @@ void* dynamic_library_load_function(DynamicLibrary lib, String name) {
 #endif
 }
 
-#endif // CSM_IMPLEMENTATION
-#endif // dynamic_library_h_INCLUDED
+#endif

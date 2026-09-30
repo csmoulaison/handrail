@@ -31,7 +31,10 @@ f64  time_seconds();
 void fiedler_init_time(FiedlerTime* fiedler);
 void fiedler_accumulate_time(FiedlerTime* fiedler);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_fiedler_h_IMPLEMENTED)
+#define handrail_fiedler_h_IMPLEMENTED
 
 f64 time_seconds() {
 #if PLATFORM == PLATFORM_LINUX
@@ -61,5 +64,4 @@ void fiedler_accumulate_time(FiedlerTime* fiedler) {
     fiedler->accumulator += frame_time;
 }
 
-#endif
 #endif

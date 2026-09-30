@@ -82,7 +82,10 @@ u64 texture_size(TextureData* texture);
 u8 texture_format_bits_per_pixel(TextureFormat format);
 u8 texture_format_bytes_per_pixel(TextureFormat format);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_texture_h_IMPLEMENTED)
+#define handrail_texture_h_IMPLEMENTED
 
 TextureData* texture_from_bmp(File* file, Stack* stack) {
     assert(sizeof(TextureBmpInfo) == 54);
@@ -168,5 +171,4 @@ u8 texture_format_bytes_per_pixel(TextureFormat format) {
     return (pixel_bits + 8 - 1) / 8;
 }
 
-#endif
 #endif

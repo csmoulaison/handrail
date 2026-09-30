@@ -52,7 +52,10 @@ void push_palettized_sprite_renderer_assets(
 // Forward declaration
 void aseprite_directory_to_sprite_atlas(String aseprite_dir, String bmp_dir, SpriteAtlasBuilder* atlas, Stack* stack);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_sprite_h_IMPLEMENTED)
+#define handrail_sprite_h_IMPLEMENTED
 
 u64 sprite_size_from_frame_count(u64 frame_count) {
     return sizeof(SpriteData) + frame_count * sizeof(SpriteFrame);
@@ -245,5 +248,4 @@ void push_palettized_sprite_renderer_assets(
         primitive, primitive_2d_size(primitive));
 }
 
-#endif
 #endif

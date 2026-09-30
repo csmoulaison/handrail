@@ -45,7 +45,10 @@ bool file_at_end(File* file);
 char file_peek_char(File* file);
 void file_peek_string_token(File* file, String* dst, char delimiter);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_file_h_IMPLEMENTED)
+#define handrail_file_h_IMPLEMENTED
 
 File file_open(String fname, FileOpenMode mode) {
     File file;
@@ -328,5 +331,4 @@ void file_peek_string_token(File* file, String* dst, char delimiter) {
     file_seek(file, -len);
 }
 
-#endif
 #endif

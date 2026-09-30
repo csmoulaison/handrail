@@ -25,7 +25,10 @@
     #define strict_assert
 #endif
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_assert_h_IMPLEMENTED)
+#define handrail_assert_h_IMPLEMENTED
 
 void print_callstack() {
 #if PLATFORM == PLATFORM_LINUX
@@ -40,5 +43,4 @@ void print_callstack() {
 #endif
 }
 
-#endif
 #endif

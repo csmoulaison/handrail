@@ -15,6 +15,10 @@ typedef struct {
 String string_init(void* buffer, u64 capacity);
 // Return a new string from a literal cstring. Capacity is set to the string length.
 String string_const(char* literal);
+// Return a new empty string backed by memory in buffer, starting at byte_index.
+String string_from_buffer(Buffer* buffer, u64 byte_index, u64 capacity);
+// Return a new empty string allocated from stack.
+String string_from_stack(Stack* stack, u64 capacity);
 
 // Return true if both strings have equal length and the same characters.
 bool string_equals(String a, String b);
@@ -55,7 +59,10 @@ void string_read_string_token(StringReader* reader, String* dst, char delimiter)
 i64  string_read_int_token(StringReader* reader, char delimiter);
 f64  string_read_float_token(StringReader* reader, char delimiter);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_string_h_IMPLEMENTED)
+#define handrail_string_h_IMPLEMENTED
 
 String string_init(void* memory, u64 capacity) {
     String string;
@@ -71,6 +78,22 @@ String string_const(char* literal) {
     string.text = literal;
     string.len = len;
     string.capacity = len;
+    return string;
+}
+
+String string_from_buffer(Buffer* buffer, u64 byte_index, u64 capacity) {
+    String string;
+    string.text = (char*)buffer_alloc(buffer, byte_index, capacity, string_const("string_from_buffer")).memory;
+    string.len = 0;
+    string.capacity = capacity;
+    return string;
+}
+
+String string_from_stack(Stack* stack, u64 capacity) {
+    String string;
+    string.text = stack_alloc(stack, capacity);
+    string.len = 0;
+    string.capacity = capacity;
     return string;
 }
 
@@ -238,5 +261,4 @@ f64 string_read_float_token(StringReader* reader, char delimiter) {
     panic(); 
 }
 
-#endif
 #endif

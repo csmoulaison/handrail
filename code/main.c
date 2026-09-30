@@ -4,7 +4,6 @@
 #define CSM_IMPLEMENTATION
 #define CSM_INCLUDE_GL
 #define BUFFER_DEBUG true
-#define BUFFER_VERBOSE false
 #include "handrail/core.h"
 
 #include "generated/asset_data.c"

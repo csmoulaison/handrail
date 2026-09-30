@@ -72,7 +72,10 @@ typedef struct {
 void synth_init(Synth* synth);
 void synth_callback(Synth* synth, f32* samples, i32 samples_len, i32 sample_rate);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_synth_h_IMPLEMENTED)
+#define handrail_synth_h_IMPLEMENTED
 
 void synth_init(Synth* synth) {
     memset(synth, 0, sizeof(Synth));
@@ -139,5 +142,4 @@ void synth_callback(Synth* synth, f32* samples, i32 samples_len, i32 sample_rate
     }
 }
 
-#endif
 #endif

@@ -1,7 +1,7 @@
 #ifndef handrail_stack_h_INCLUDED
 #define handrail_stack_h_INCLUDED
 
-typedef struct {
+struct Stack {
     union {
         Buffer buffer;
         struct {
@@ -10,7 +10,7 @@ typedef struct {
         };
     };
     u64 head;
-} Stack;
+};
 
 Stack stack_init(Buffer buffer, String label);
 Stack stack_from_memory(u8* memory, u64 size, String label);
@@ -23,9 +23,11 @@ void*  stack_alloc(Stack* stack, u64 size);
 void*  stack_alloc_zero(Stack* stack, u64 size);
 Buffer stack_alloc_labeled(Stack* stack, u64 size, String label);
 Buffer stack_alloc_typed(Stack* stack, u64 size, String label, BufferType type);
-String string_from_stack(Stack* stack, u64 capacity);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_stack_h_IMPLEMENTED)
+#define handrail_stack_h_IMPLEMENTED
 
 Stack stack_init(Buffer buffer, String label) {
     Stack stack = {};
@@ -34,16 +36,9 @@ Stack stack_init(Buffer buffer, String label) {
 
 #if BUFFER_DEBUG
     stack.buffer.label = label;
-    #if BUFFER_VERBOSE
-    String log = string_init((char[4096]){}, 4096);
-    string_cat(&log, stack.buffer.label);
-    string_cat(&log, string_const(": Stack initialized. "));
-    string_print_int(&log, buffer.size);
-    string_cat(&log, string_const(" bytes"));
-    string_write_null_terminator(&log);
-    printf("%s\n", log.text);
-    #endif
 #endif
+    log_print(LOG_MEMORY, STRING_FMT ": Stack initialized. %" PRIu64 " bytes",
+              STRING_ARG(label), buffer.size);
     return stack;
 }
 
@@ -64,14 +59,7 @@ void stack_clear(Stack* stack)
 {
     stack->head = 0;
     buffer_clear_suballocations(&stack->buffer);
-
-#if BUFFER_VERBOSE
-    String log = string_init((char[4096]){}, 4096);
-    string_cat(&log, stack->buffer.label);
-    string_cat(&log, string_const(": Stack cleared."));
-    string_write_null_terminator(&log);
-    printf("%s\n", log.text);
-#endif
+    log_print(LOG_MEMORY, STRING_FMT ": Stack cleared", STRING_ARG(buffer_label(&stack->buffer)));
 }
 
 void stack_clear_to_zero(Stack* stack)
@@ -98,56 +86,24 @@ Buffer stack_alloc_labeled(Stack* stack, u64 size, String label) {
 Buffer stack_alloc_typed(Stack* stack, u64 size, String label, BufferType type) {
     assert(stack->memory != NULL);
     if(stack->head + size > stack->size) {
-#if BUFFER_VERBOSE
-        String log = string_init((char[4096]){}, 4096);
-        string_cat(&log, stack->buffer.label);
-        string_cat(&log, string_const(": Stack overflow. Size: "));
-        string_print_int(&log, stack->size);
-        string_cat(&log, string_const(", Requested Size: "));
-        string_print_int(&log, stack->head + size);
-        string_write_null_terminator(&log);
-        printf("%s\n", log.text);
-#endif
-        panic();
+        log_exit(STRING_FMT ": Stack overflow. Size: %" PRIu64 ", requested size: %" PRIu64,
+                 STRING_ARG(buffer_label(&stack->buffer)), stack->size, stack->head + size);
     }
 
-#if BUFFER_VERBOSE
-    String log = string_init((char[4096]){}, 4096);
-    string_cat(&log, stack->buffer.label);
-    string_cat(&log, string_const(": Stack allocation from "));
-    string_print_int(&log, stack->head);
-    string_cat(&log, string_const("-"));
-    string_print_int(&log, stack->head + size);
-    string_cat(&log, string_const(". "));
-    string_print_int(&log, size);
-    string_cat(&log, string_const(" bytes"));
-    string_write_null_terminator(&log);
-    printf("%s\n", log.text);
-#endif
+    log_print(LOG_MEMORY, STRING_FMT ": Stack allocation from %" PRIu64 "-%" PRIu64 ". %" PRIu64 " bytes",
+              STRING_ARG(buffer_label(&stack->buffer)), stack->head, stack->head + size, size);
 
     Buffer buffer = buffer_alloc_typed(&stack->buffer, stack->head, size, label, type);
+    u64 half = stack->size / 2;
+    bool crossed_half = stack->head <= half && stack->head + size > half;
     stack->head += size;
 
-#if BUFFER_VERBOSE
-    if(stack->head > stack->size / 2) {
-        String log = string_init((char[4096]){}, 4096);
-        string_cat(&log, stack->buffer.label);
-        string_cat(&log, string_const(": Stack more than half full"));
-        string_write_null_terminator(&log);
-        printf("%s\n", log.text);
+    // Only log when crossing the halfway mark, not on every allocation after it
+    if(crossed_half) {
+        log_print(LOG_MEMORY, STRING_FMT ": Stack more than half full", STRING_ARG(buffer_label(&stack->buffer)));
     }
-#endif
 
     return buffer;
 }
 
-String string_from_stack(Stack* stack, u64 capacity) {
-    String string;
-    string.text = stack_alloc(stack, capacity);
-    string.len = 0;
-    string.capacity = capacity;
-    return string;
-}
-
-#endif
 #endif

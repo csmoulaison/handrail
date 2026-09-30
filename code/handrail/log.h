@@ -19,6 +19,7 @@
 #define LOG_RENDER     (1ull << 5)
 #define LOG_ASSET      (1ull << 6)
 #define LOG_HOT_RELOAD (1ull << 7)
+#define LOG_MEMORY     (1ull << 8)
 
 #define LOG_ENGINE_LAYERS_LEN 32
 #define LOG_ENGINE_ALL        0x00000000FFFFFFFFull
@@ -84,14 +85,17 @@ void log_set_layer_name(u64 layer, String name);
 // Use log_print rather than calling this directly.
 void log_write(u64 layer, char* file, i32 line, char* format, ...) LOG_PRINTF_FORMAT(4, 5);
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_log_h_IMPLEMENTED)
+#define handrail_log_h_IMPLEMENTED
 
 #include <stdarg.h>
 
 static Log* log_global = NULL;
 
 static char* log_engine_layer_names[LOG_ENGINE_LAYERS_LEN] = {
-    "error", "warn", "info", "platform", "audio", "render", "asset", "hot_reload",
+    "error", "warn", "info", "platform", "audio", "render", "asset", "hot_reload", "memory",
 };
 
 static i32 log_layer_index(u64 layer) {
@@ -186,5 +190,4 @@ void log_write(u64 layer, char* file, i32 line, char* format, ...) {
     }
 }
 
-#endif
 #endif

@@ -16,7 +16,10 @@ static u32 fast_random_u32();
 static f32 fast_random_f32();
 static f32 fast_random_f32_signed();
 
-#ifdef CSM_IMPLEMENTATION
+#endif
+
+#if defined(HANDRAIL_IMPLEMENTATION_PASS) && !defined(handrail_random_h_IMPLEMENTED)
+#define handrail_random_h_IMPLEMENTED
 
 inline void fast_random_init() {
     fast_random_seed = time(NULL);
@@ -63,5 +66,4 @@ f32 random_f32_signed() {
     return random_f32() * 2.0f - 1.0f;
 }
 
-#endif
 #endif
