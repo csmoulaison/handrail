@@ -47,6 +47,97 @@ void string_print_int(String* string, i64 n);
 // Write a string representation of an f64 to dst.
 void string_print_float(String* string, f64 n);
 
+// Maximum number of arguments to string_format, including the format itself.
+#define STRING_FORMAT_ARGS_MAX 16
+
+typedef enum {
+    STRING_FORMAT_ARG_INT,
+    STRING_FORMAT_ARG_UINT,
+    STRING_FORMAT_ARG_FLOAT,
+    STRING_FORMAT_ARG_STRING,
+} StringFormatArgType;
+
+// A string_format argument, tagged with its type so any integer or float size can be passed.
+typedef struct {
+    StringFormatArgType type;
+    union {
+        i64 i;
+        u64 u;
+        f64 f;
+        String s;
+    };
+} StringFormatArg;
+
+StringFormatArg string_format_arg_int(i64 n);
+StringFormatArg string_format_arg_uint(u64 n);
+StringFormatArg string_format_arg_float(f64 n);
+StringFormatArg string_format_arg_string(String s);
+StringFormatArg string_format_arg_cstring(const char* s);
+
+// Wrap a value in a StringFormatArg based on its type. Standard types are listed
+// rather than the u8..i64 aliases, since the aliases map to different standard
+// types per platform and _Generic rejects duplicates.
+#define string_format_arg(x) _Generic((x),                  \
+    _Bool:              string_format_arg_int,              \
+    char:               string_format_arg_int,              \
+    signed char:        string_format_arg_int,              \
+    short:              string_format_arg_int,              \
+    int:                string_format_arg_int,              \
+    long:               string_format_arg_int,              \
+    long long:          string_format_arg_int,              \
+    unsigned char:      string_format_arg_uint,             \
+    unsigned short:     string_format_arg_uint,             \
+    unsigned int:       string_format_arg_uint,             \
+    unsigned long:      string_format_arg_uint,             \
+    unsigned long long: string_format_arg_uint,             \
+    float:              string_format_arg_float,            \
+    double:             string_format_arg_float,            \
+    String:             string_format_arg_string,           \
+    char*:              string_format_arg_cstring,          \
+    const char*:        string_format_arg_cstring)(x)
+
+// Count the variadic arguments, up to STRING_FORMAT_ARGS_MAX.
+#define STRING_FORMAT_COUNT(...) STRING_FORMAT_COUNT_(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define STRING_FORMAT_COUNT_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, n, ...) n
+
+// Apply string_format_arg to each variadic argument, comma separated.
+#define STRING_FORMAT_CAT(a, b)  STRING_FORMAT_CAT_(a, b)
+#define STRING_FORMAT_CAT_(a, b) a##b
+#define STRING_FORMAT_MAP(...)   STRING_FORMAT_CAT(STRING_FORMAT_MAP_, STRING_FORMAT_COUNT(__VA_ARGS__))(__VA_ARGS__)
+#define STRING_FORMAT_MAP_1(a)       string_format_arg(a)
+#define STRING_FORMAT_MAP_2(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_1(__VA_ARGS__)
+#define STRING_FORMAT_MAP_3(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_2(__VA_ARGS__)
+#define STRING_FORMAT_MAP_4(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_3(__VA_ARGS__)
+#define STRING_FORMAT_MAP_5(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_4(__VA_ARGS__)
+#define STRING_FORMAT_MAP_6(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_5(__VA_ARGS__)
+#define STRING_FORMAT_MAP_7(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_6(__VA_ARGS__)
+#define STRING_FORMAT_MAP_8(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_7(__VA_ARGS__)
+#define STRING_FORMAT_MAP_9(a, ...)  string_format_arg(a), STRING_FORMAT_MAP_8(__VA_ARGS__)
+#define STRING_FORMAT_MAP_10(a, ...) string_format_arg(a), STRING_FORMAT_MAP_9(__VA_ARGS__)
+#define STRING_FORMAT_MAP_11(a, ...) string_format_arg(a), STRING_FORMAT_MAP_10(__VA_ARGS__)
+#define STRING_FORMAT_MAP_12(a, ...) string_format_arg(a), STRING_FORMAT_MAP_11(__VA_ARGS__)
+#define STRING_FORMAT_MAP_13(a, ...) string_format_arg(a), STRING_FORMAT_MAP_12(__VA_ARGS__)
+#define STRING_FORMAT_MAP_14(a, ...) string_format_arg(a), STRING_FORMAT_MAP_13(__VA_ARGS__)
+#define STRING_FORMAT_MAP_15(a, ...) string_format_arg(a), STRING_FORMAT_MAP_14(__VA_ARGS__)
+#define STRING_FORMAT_MAP_16(a, ...) string_format_arg(a), STRING_FORMAT_MAP_15(__VA_ARGS__)
+
+// Write formatted text to the end of dst. The format is a String or cstring.
+// Specifiers: %s (String or cstring), %i (any integer), %f (any float), %% (literal %).
+// Takes at most 15 arguments after the format. A specifier that doesn't match its
+// argument, or a mismatched argument count, panics.
+#define string_format(dst, ...) \
+    string_format((dst), (StringFormatArg[]){ STRING_FORMAT_MAP(__VA_ARGS__) }, STRING_FORMAT_COUNT(__VA_ARGS__))
+// Return a new string allocated from stack, holding the formatted text. Capacity is
+// one byte more than the length, leaving room for a null terminator. Same
+// specifiers as string_format.
+#define string_format_from_stack(stack, ...) \
+    string_format_from_stack((stack), (StringFormatArg[]){ STRING_FORMAT_MAP(__VA_ARGS__) }, STRING_FORMAT_COUNT(__VA_ARGS__))
+
+// The functions share names with the macros above, which call them. Parentheses
+// around the name stop the macro from expanding. args[0] is the format.
+void   (string_format)(String* dst, StringFormatArg* args, i32 args_len);
+String (string_format_from_stack)(Stack* stack, StringFormatArg* args, i32 args_len);
+
 typedef struct {
     String* string;
     u64 head;
@@ -190,6 +281,124 @@ void string_print_float(String* dst, f64 n) {
     u64 len = snprintf(buf, 256, "%lf", n);
     assert(len < 256);
     string_write(dst, buf, len);
+}
+
+StringFormatArg string_format_arg_int(i64 n) {
+    return (StringFormatArg){ .type = STRING_FORMAT_ARG_INT, .i = n };
+}
+
+StringFormatArg string_format_arg_uint(u64 n) {
+    return (StringFormatArg){ .type = STRING_FORMAT_ARG_UINT, .u = n };
+}
+
+StringFormatArg string_format_arg_float(f64 n) {
+    return (StringFormatArg){ .type = STRING_FORMAT_ARG_FLOAT, .f = n };
+}
+
+StringFormatArg string_format_arg_string(String s) {
+    return (StringFormatArg){ .type = STRING_FORMAT_ARG_STRING, .s = s };
+}
+
+StringFormatArg string_format_arg_cstring(const char* s) {
+    return string_format_arg_string(string_const((char*)s));
+}
+
+// Write chars to dst if it isn't NULL, and return len either way.
+static u64 string_format_emit(String* dst, char* chars, u64 len) {
+    if(dst != NULL) {
+        string_write(dst, chars, len);
+    }
+    return len;
+}
+
+static void string_format_mismatch(String format, char specifier, i32 arg_index) {
+    fprintf(stderr, "string_format: argument %i doesn't match specifier '%%%c' in format \"" STRING_FMT "\"\n",
+            arg_index, specifier, STRING_ARG(format));
+    panic();
+}
+
+// Walk the format, writing to dst unless it's NULL. Returns the formatted length,
+// so the same walk both measures and writes.
+static u64 string_format_walk(String* dst, StringFormatArg* args, i32 args_len) {
+    assert(args_len > 0);
+    assert(args[0].type == STRING_FORMAT_ARG_STRING);
+    String format = args[0].s;
+    i32 arg_index = 1;
+    u64 len = 0;
+    for(u64 i = 0; i < format.len; i++) {
+        char c = format.text[i];
+        if(c != '%') {
+            len += string_format_emit(dst, &c, 1);
+            continue;
+        }
+
+        // Read the specifier
+        i++;
+        if(i == format.len) {
+            fprintf(stderr, "string_format: format ends with '%%': \"" STRING_FMT "\"\n", STRING_ARG(format));
+            panic();
+        }
+        char specifier = format.text[i];
+        if(specifier == '%') {
+            len += string_format_emit(dst, &specifier, 1);
+            continue;
+        }
+        if(arg_index >= args_len) {
+            fprintf(stderr, "string_format: too few arguments for format \"" STRING_FMT "\"\n", STRING_ARG(format));
+            panic();
+        }
+        StringFormatArg arg = args[arg_index];
+
+        // Write the argument. %lf of a large f64 can be over 300 chars.
+        char buf[512];
+        i32 buf_len = 0;
+        switch(specifier) {
+            case 's': {
+                if(arg.type != STRING_FORMAT_ARG_STRING) string_format_mismatch(format, specifier, arg_index);
+                len += string_format_emit(dst, arg.s.text, arg.s.len);
+            } break;
+            case 'i': {
+                if(arg.type == STRING_FORMAT_ARG_INT) {
+                    buf_len = snprintf(buf, sizeof(buf), "%" PRId64, arg.i);
+                } else if(arg.type == STRING_FORMAT_ARG_UINT) {
+                    buf_len = snprintf(buf, sizeof(buf), "%" PRIu64, arg.u);
+                } else {
+                    string_format_mismatch(format, specifier, arg_index);
+                }
+                assert(buf_len >= 0 && buf_len < sizeof(buf));
+                len += string_format_emit(dst, buf, buf_len);
+            } break;
+            case 'f': {
+                if(arg.type != STRING_FORMAT_ARG_FLOAT) string_format_mismatch(format, specifier, arg_index);
+                buf_len = snprintf(buf, sizeof(buf), "%lf", arg.f);
+                assert(buf_len >= 0 && buf_len < sizeof(buf));
+                len += string_format_emit(dst, buf, buf_len);
+            } break;
+            default: {
+                fprintf(stderr, "string_format: unknown specifier '%%%c' in format \"" STRING_FMT "\"\n",
+                        specifier, STRING_ARG(format));
+                panic();
+            } break;
+        }
+        arg_index++;
+    }
+    if(arg_index != args_len) {
+        fprintf(stderr, "string_format: %i arguments given, format \"" STRING_FMT "\" uses %i\n",
+                args_len - 1, STRING_ARG(format), arg_index - 1);
+        panic();
+    }
+    return len;
+}
+
+void (string_format)(String* dst, StringFormatArg* args, i32 args_len) {
+    string_format_walk(dst, args, args_len);
+}
+
+String (string_format_from_stack)(Stack* stack, StringFormatArg* args, i32 args_len) {
+    u64 len = string_format_walk(NULL, args, args_len);
+    String string = string_from_stack(stack, len + 1);
+    string_format_walk(&string, args, args_len);
+    return string;
 }
 
 StringReader string_reader_init(String* string) {
