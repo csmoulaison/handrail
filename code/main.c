@@ -1,3 +1,6 @@
+// config.h is provided by the specific game
+#include "config.h"
+
 #define CSM_IMPLEMENTATION
 #define CSM_INCLUDE_GL
 #define BUFFER_DEBUG true
@@ -88,13 +91,13 @@ typedef GLXContext(*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXCo
 #define ALSA_VERIFY(alsa_function) { \
     i32 alsa_error; \
     if((alsa_error = alsa_function) < 0) { \
-        fprintf(stderr, "ALSA error: %s\n", snd_strerror(alsa_error)); \
-        exit(1); \
+        log_exit("ALSA error: %s", snd_strerror(alsa_error)); \
     } \
 } 
 
 typedef struct {
     bool                close_requested;
+    Log                 log;
 
     Display*            display;
     Window              window;
@@ -110,6 +113,7 @@ typedef struct {
 
 void update_game_library(Context* context) {
     if(dynamic_library_update(&context->game)) {
+        log_print(LOG_HOT_RELOAD, "Loaded game library " STRING_FMT, STRING_ARG(context->game.path));
         context->game_init           = dynamic_library_load_function(context->game, string_const("game_init"));
         context->game_update         = dynamic_library_load_function(context->game, string_const("game_update"));
         context->game_audio_callback = dynamic_library_load_function(context->game, string_const("game_audio_callback"));
@@ -184,6 +188,11 @@ i32 main(i32 argc, char** argv) {
     Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
     Stack render_frame_stack   = stack_from_stack(&root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
     Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
+
+    // Initialize logging
+    log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
+    log_bind(&context->log);
+    context->platform.log = &context->log;
 
     // Init Xlib/GLX window
     context->display = XOpenDisplay("");
@@ -308,7 +317,7 @@ i32 main(i32 argc, char** argv) {
     render_init(render_stack.memory, asset_pack_data);
     dynamic_library_init(&context->game, string_const(GAME_LIB_NAME));
     update_game_library(context);
-    context->game_init(game_stack.memory, asset_pack_data);
+    context->game_init(game_stack.memory, asset_pack_data, &context->platform);
 
     // Loop
     while(context->close_requested == false) {

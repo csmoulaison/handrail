@@ -1,7 +1,7 @@
 #ifndef handrail_game_h_INCLUDED
 #define handrail_game_h_INCLUDED
 
-#define GAME_INIT(name) void name(void* game_memory, void* asset_memory)
+#define GAME_INIT(name) void name(void* game_memory, void* asset_memory, Platform* platform)
 typedef GAME_INIT(GameInitFunction);
 GAME_INIT(game_init_stub) {}
 

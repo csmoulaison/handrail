@@ -56,11 +56,11 @@ typedef size_t   usize;
 
 #include "handrail/assert.h"
 #include "handrail/string.h"
-#include "handrail/log.h"
 #include "handrail/buffer.h"
 #include "handrail/stack.h"
 #include "handrail/random.h"
 #include "handrail/file.h"
+#include "handrail/log.h"
 #include "handrail/math.h"
 
 #ifdef CSM_INCLUDE_GL

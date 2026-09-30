@@ -42,6 +42,7 @@ typedef struct {
 } PlatformEvent;
 
 typedef struct {
+    Log*          log;
     iv2           window_size;
     bool          window_size_updated_this_frame;
     PlatformEvent events[PLATFORM_MAX_EVENTS_PER_FRAME];
