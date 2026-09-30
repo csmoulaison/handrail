@@ -8,10 +8,12 @@
 #define DEBUG_ASSERTIONS 1
 #define DEBUG_STRICT_ASSERTIONS 1
 
-#define panic() do { printf("Panic at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } while(0)
+// Both report through the log, whatever LOG_MASK is, so failures reach every
+// log target including the log file.
+#define panic() do { log_write(LOG_ERROR, __FILE__, __LINE__, "Panic"); print_callstack(); exit(1); } while(0)
 
 #undef assert
-#define assert(assertion) do { if(!(assertion)) { printf("Assertion failed at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } } while(0)
+#define assert(assertion) do { if(!(assertion)) { log_write(LOG_ERROR, __FILE__, __LINE__, "Assertion failed: %s", #assertion); print_callstack(); exit(1); } } while(0)
 
 #if DEBUG_ASSERTIONS
     #define debug_assert(assertion) assert(assertion)
@@ -35,11 +37,17 @@ void print_callstack() {
     void* callstack[128];
     int frames = backtrace(callstack, 128);
     char** strs = backtrace_symbols(callstack, frames);
-    printf("--- Call Stack ---\n");
+    char header[] = "--- Call Stack ---\n";
+    log_write_raw(LOG_ERROR, header, sizeof(header) - 1);
     for (int i = 0; i < frames; i++) {
-        printf("%s\n", strs[i]);
+        char line[LOG_LINE_MAX];
+        i32 len = snprintf(line, LOG_LINE_MAX, "%s\n", strs[i]);
+        log_write_raw(LOG_ERROR, line, len < LOG_LINE_MAX ? len : LOG_LINE_MAX - 1);
     }
     free(strs); 
+#elif PLATFORM == PLATFORM_WINDOWS
+    // TODO: Walk the stack with CaptureStackBackTrace and DbgHelp
+#elif PLATFORM == PLATFORM_WEB
 #endif
 }
 

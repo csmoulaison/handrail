@@ -78,7 +78,8 @@ static const GUID WASAPI_SUBTYPE_IEEE_FLOAT         = { 0x00000003, 0x0000, 0x00
 // memory, so a read or write of up to ring_size bytes starting at any offset is
 // contiguous. The offsets count bytes written and read since startup and wrap
 // around; only their difference and their value masked by ring_size - 1 matter.
-// Each offset has one writer, so no lock is needed.
+// Each offset has one writer, so no lock is needed. The audio thread doesn't
+// log, so it counts trouble for the main loop to report.
 typedef struct {
     IAudioClient* client;
     HANDLE        event;
@@ -88,6 +89,8 @@ typedef struct {
     u32           ring_size;
     volatile LONG read_offset;
     volatile LONG write_offset;
+    volatile LONG underrun_count;
+    volatile LONG priority_failed;
 } Wasapi;
 
 typedef struct {
@@ -171,15 +174,22 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     if(context == NULL) {
         return DefWindowProcA(hwnd, message, wparam, lparam);
     }
+    log_print(LOG_PLATFORM_VERBOSE, "Win32 message 0x%x", message);
 
     switch(message) {
         case WM_CLOSE: {
+            log_print(LOG_INFO, "Close requested by the window");
             context->close_requested = true;
             return 0;
+        } break;
+        case WM_ACTIVATE: {
+            log_print(LOG_PLATFORM, LOWORD(wparam) == WA_INACTIVE ? "Window focus lost" : "Window focus gained");
         } break;
         case WM_SIZE: {
             iv2 window_size = iv2_new(LOWORD(lparam), HIWORD(lparam));
             if(!iv2_eq(window_size, context->platform.window_size)) {
+                log_print(LOG_PLATFORM, "Window resized %ix%i -> %ix%i",
+                          context->platform.window_size.x, context->platform.window_size.y, window_size.x, window_size.y);
                 context->platform.window_size = window_size;
                 context->platform.window_size_updated_this_frame = true;
             }
@@ -189,6 +199,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             // Bit 30 is set if the key was already down, i.e. this is an auto-repeat
             if((lparam & (1 << 30)) == 0) {
                 PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+                if(key == PLATFORM_KEY_NONE) {
+                    log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: virtual key 0x%x", (u32)wparam);
+                }
                 platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYDOWN, .key = key });
             }
             return 0;
@@ -213,6 +226,9 @@ DWORD WINAPI wasapi_audio_thread(LPVOID arg) {
     // Ask the scheduler for audio priority. Failing that, run at normal priority.
     DWORD task_index = 0;
     HANDLE task = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
+    if(task == NULL) {
+        InterlockedExchange(&audio->priority_failed, 1);
+    }
 
     IAudioRenderClient* playback = NULL;
     HR_VERIFY(IAudioClient_GetService(audio->client, &WASAPI_IID_AUDIO_RENDER_CLIENT, (void**)&playback));
@@ -240,6 +256,10 @@ DWORD WINAPI wasapi_audio_thread(LPVOID arg) {
         u32 write_offset = (u32)ReadAcquire(&audio->write_offset);
         u32 queued_frames = (write_offset - read_offset) / AUDIO_BYTES_PER_FRAME;
         u32 copy_frames = min(queued_frames, free_frames);
+        // Silence before the main loop's first write is expected, not an underrun
+        if(copy_frames < free_frames && write_offset != 0) {
+            InterlockedIncrement(&audio->underrun_count);
+        }
         memcpy(output, audio->ring + (read_offset & ring_mask), copy_frames * AUDIO_BYTES_PER_FRAME);
         memset(output + copy_frames * AUDIO_BYTES_PER_FRAME, 0, (free_frames - copy_frames) * AUDIO_BYTES_PER_FRAME);
         HR_VERIFY(IAudioRenderClient_ReleaseBuffer(playback, free_frames, 0));
@@ -265,7 +285,9 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
 
     // Open a console for stdout and stderr, which a /SUBSYSTEM:WINDOWS program doesn't get
-    assert(AllocConsole());
+    if(!AllocConsole()) {
+        log_exit("AllocConsole failed (error %lu)", GetLastError());
+    }
     FILE* console_file;
     freopen_s(&console_file, "CONOUT$", "w", stdout);
     freopen_s(&console_file, "CONOUT$", "w", stderr);
@@ -275,6 +297,10 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
     log_bind(&context->log);
     context->platform.log = &context->log;
+    log_print(LOG_INFO, "%s starting on Windows, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
+              GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
+    log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
+              (u64)ROOT_MEMORY_SIZE, (u64)sizeof(Context), (u64)GAME_STACK_SIZE, (u64)RENDER_STACK_SIZE, (u64)PLATFORM_FRAME_STACK_SIZE);
 
     // Create window, sized so its client area is the requested size
     WNDCLASSA window_class = {};
@@ -282,7 +308,9 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     window_class.hInstance     = hinstance;
     window_class.hCursor       = LoadCursor(NULL, IDC_ARROW);
     window_class.lpszClassName = GAME_NAME;
-    assert(RegisterClassA(&window_class));
+    if(!RegisterClassA(&window_class)) {
+        log_exit("RegisterClassA failed (error %lu)", GetLastError());
+    }
 
     RECT window_rect = { 0, 0, 1280, 720 };
     AdjustWindowRect(&window_rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -290,11 +318,15 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         0, GAME_NAME, GAME_NAME, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
         NULL, NULL, hinstance, context);
-    assert(context->hwnd != NULL);
+    if(context->hwnd == NULL) {
+        log_exit("CreateWindowExA failed (error %lu)", GetLastError());
+    }
     RECT client_rect;
     GetClientRect(context->hwnd, &client_rect);
     context->platform.window_size = iv2_new(client_rect.right, client_rect.bottom);
     context->platform.window_size_updated_this_frame = false;
+    log_print(LOG_PLATFORM, "Window created, 1280x720 requested, client area %ix%i",
+              context->platform.window_size.x, context->platform.window_size.y);
 
     // Initialize WASAPI audio on the default playback device
     Wasapi* audio = &context->audio;
@@ -306,6 +338,11 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     IMMDeviceEnumerator_Release(enumerator);
     HR_VERIFY(IMMDevice_Activate(device, &WASAPI_IID_AUDIO_CLIENT, CLSCTX_ALL, NULL, (void**)&audio->client));
     IMMDevice_Release(device);
+    WAVEFORMATEX* mix_format = NULL;
+    HR_VERIFY(IAudioClient_GetMixFormat(audio->client, &mix_format));
+    log_print(LOG_AUDIO, "WASAPI mix format: %lu Hz, %u channels, %u bits",
+              (unsigned long)mix_format->nSamplesPerSec, (u32)mix_format->nChannels, (u32)mix_format->wBitsPerSample);
+    CoTaskMemFree(mix_format);
 
     WAVEFORMATEXTENSIBLE format = {};
     format.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
@@ -366,6 +403,9 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     audio->read_offset = 0;
     audio->write_offset = 0;
     audio->stop = 0;
+    audio->underrun_count = 0;
+    audio->priority_failed = 0;
+    log_print(LOG_AUDIO, "WASAPI ring buffer %u bytes, target latency %u frames", audio->ring_size, (u32)AUDIO_LATENCY_FRAMES);
     audio->thread = CreateThread(NULL, 0, wasapi_audio_thread, audio, 0, NULL);
     assert(audio->thread != NULL);
 
@@ -378,10 +418,20 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
     game_library_update(&context->game);
     RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
+    log_print(LOG_ASSET, "Asset pack: %" PRIu64 " bytes", (u64)ASSET_PACK_SIZE);
     context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
     vk_load_assets(vk, render_setup);
 
     // Loop
+    u64 frame_count = 0;
+    f64 frame_time_total = 0.0;
+    bool was_minimized = false;
+    LONG reported_underrun_count = 0;
+    bool priority_reported = false;
+    LARGE_INTEGER counter_frequency;
+    LARGE_INTEGER frame_start;
+    QueryPerformanceFrequency(&counter_frequency);
+    QueryPerformanceCounter(&frame_start);
     while(context->close_requested == false) {
         // Pump Win32 messages, which window_proc turns into platform state and events
         MSG message;
@@ -395,6 +445,10 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 
         // A minimized window has no area to render to, so only keep audio going
         bool minimized = context->platform.window_size.x == 0 || context->platform.window_size.y == 0;
+        if(minimized != was_minimized) {
+            log_print(LOG_PLATFORM, minimized ? "Window minimized" : "Window restored");
+            was_minimized = minimized;
+        }
 
         // Update game, which writes the frame straight into GPU memory
         RenderFrame render_frame;
@@ -406,11 +460,28 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         // Top the audio ring up to the target latency. The game writes straight into it.
         u32 write_offset = (u32)audio->write_offset;
         u32 read_offset = (u32)ReadAcquire(&audio->read_offset);
-        i32 frames_len = AUDIO_LATENCY_FRAMES - (i32)((write_offset - read_offset) / AUDIO_BYTES_PER_FRAME);
+        i32 queued_frames = (i32)((write_offset - read_offset) / AUDIO_BYTES_PER_FRAME);
+        i32 frames_len = AUDIO_LATENCY_FRAMES - queued_frames;
+        if(frame_count > 0 && queued_frames < AUDIO_LATENCY_FRAMES / 4) {
+            log_print(LOG_WARN, "Audio nearly drained: %i frames queued, target %u", queued_frames, (u32)AUDIO_LATENCY_FRAMES);
+        }
+        log_print(LOG_AUDIO_VERBOSE, "WASAPI ring %i frames queued, writing %i frames", queued_frames, frames_len);
         if(frames_len > 0) {
             f32* samples = (f32*)(audio->ring + (write_offset & (audio->ring_size - 1)));
             context->game.audio_callback(game_stack.memory, samples, frames_len);
             InterlockedAdd(&audio->write_offset, (LONG)(frames_len * AUDIO_BYTES_PER_FRAME));
+        }
+
+        // Report what the audio thread counted, since it doesn't log
+        LONG underrun_count = ReadAcquire(&audio->underrun_count);
+        if(underrun_count != reported_underrun_count) {
+            log_print(LOG_WARN, "WASAPI underrun: %ld periods padded with silence (%ld total)",
+                      (long)(underrun_count - reported_underrun_count), (long)underrun_count);
+            reported_underrun_count = underrun_count;
+        }
+        if(!priority_reported && ReadAcquire(&audio->priority_failed)) {
+            log_print(LOG_WARN, "Audio thread couldn't get Pro Audio scheduling priority");
+            priority_reported = true;
         }
 
         // Render
@@ -425,12 +496,30 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         game_library_update(&context->game);
         context->platform.window_size_updated_this_frame = false;
         context->platform.events_len = 0;
+
+        // Frame timing
+        LARGE_INTEGER frame_end;
+        QueryPerformanceCounter(&frame_end);
+        f64 frame_time = (f64)(frame_end.QuadPart - frame_start.QuadPart) / (f64)counter_frequency.QuadPart;
+        frame_start = frame_end;
+        frame_time_total += frame_time;
+        frame_count++;
+        log_print(LOG_RENDER_VERBOSE, "Frame %" PRIu64 ": %.2f ms", frame_count, frame_time * 1000.0);
     }
 
     // Stop the audio thread before the process tears down the memory it uses
     InterlockedExchange(&audio->stop, 1);
     SetEvent(audio->event);
     WaitForSingleObject(audio->thread, INFINITE);
+
+    // Shut down
+    log_print(LOG_INFO, "Shutting down after %" PRIu64 " frames, average frame time %.2f ms",
+              frame_count, frame_count > 0 ? frame_time_total / (f64)frame_count * 1000.0 : 0.0);
+    stack_log_usage(&root_stack);
+    stack_log_usage(&game_stack);
+    stack_log_usage(&render_stack);
+    stack_log_usage(&render_scratch_stack);
+    stack_log_usage(&platform_frame_stack);
     return 0;
 }
 
@@ -445,6 +534,8 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 
 #include <alsa/asoundlib.h>
 #include <alloca.h>
+#include <errno.h>
+#include <time.h>
 
 #define ALSA_VERIFY(alsa_function) { \
     i32 alsa_error; \
@@ -537,25 +628,35 @@ i32 main(i32 argc, char** argv) {
     log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
     log_bind(&context->log);
     context->platform.log = &context->log;
+    log_print(LOG_INFO, "%s starting on Linux, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
+              GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
+    log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
+              (u64)ROOT_MEMORY_SIZE, (u64)sizeof(Context), (u64)GAME_STACK_SIZE, (u64)RENDER_STACK_SIZE, (u64)PLATFORM_FRAME_STACK_SIZE);
 
     // Init Xlib window
     context->display = XOpenDisplay("");
-    assert(context->display != NULL);
+    if(context->display == NULL) {
+        log_exit("Couldn't open X display");
+    }
 
     i32 screen = DefaultScreen(context->display);
     Window root_window = RootWindow(context->display, screen);
     XSetWindowAttributes set_window_attributes = {};
     set_window_attributes.background_pixmap = None;
     set_window_attributes.border_pixel = 0;
-    set_window_attributes.event_mask = StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask;
+    set_window_attributes.event_mask = StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask | FocusChangeMask;
 
     u32 window_width = 1280;
     u32 window_height = 720;
     context->window = XCreateWindow(context->display, root_window, 0, 0, window_width, window_height, 0, DefaultDepth(context->display, screen), InputOutput, DefaultVisual(context->display, screen), CWBorderPixel | CWEventMask, &set_window_attributes);
-    if(context->window == 0) { panic(); }
+    if(context->window == 0) {
+        log_exit("XCreateWindow failed");
+    }
     XStoreName(context->display, context->window, GAME_NAME);
     XMapWindow(context->display, context->window);
     context->platform.window_size = iv2_new(window_width, window_height);
+    // The window manager may pick another size, which arrives as a ConfigureNotify
+    log_print(LOG_PLATFORM, "Window created, %ux%u requested", window_width, window_height);
 
     // Ask the window manager to tell us when the window is closed, rather than killing the connection
     Atom wm_delete_window = XInternAtom(context->display, "WM_DELETE_WINDOW", False);
@@ -577,6 +678,15 @@ i32 main(i32 argc, char** argv) {
     if(sample_rate != AUDIO_SAMPLE_RATE) {
         log_print(LOG_WARN, "ALSA is playing at %u Hz rather than %u Hz", sample_rate, AUDIO_SAMPLE_RATE);
     }
+    snd_pcm_uframes_t alsa_period_frames = 0;
+    snd_pcm_uframes_t alsa_buffer_frames = 0;
+    u32 alsa_channels = 0;
+    ALSA_VERIFY(snd_pcm_hw_params_get_period_size(hw_params, &alsa_period_frames, NULL));
+    ALSA_VERIFY(snd_pcm_hw_params_get_buffer_size(hw_params, &alsa_buffer_frames));
+    ALSA_VERIFY(snd_pcm_hw_params_get_channels(hw_params, &alsa_channels));
+    log_print(LOG_AUDIO, "ALSA device %s: %u Hz, %u channels, f32, period %lu frames, buffer %lu frames, target latency %u frames",
+              snd_pcm_name(context->alsa_pcm), sample_rate, alsa_channels,
+              (unsigned long)alsa_period_frames, (unsigned long)alsa_buffer_frames, (u32)AUDIO_LATENCY_FRAMES);
 
     // Initialize renderer and game
     VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
@@ -587,22 +697,35 @@ i32 main(i32 argc, char** argv) {
     dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
     game_library_update(&context->game);
     RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
+    log_print(LOG_ASSET, "Asset pack: %" PRIu64 " bytes", (u64)ASSET_PACK_SIZE);
     context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
     vk_load_assets(vk, render_setup);
 
     // Loop
+    u64 frame_count = 0;
+    f64 frame_time_total = 0.0;
+    struct timespec frame_start;
+    clock_gettime(CLOCK_MONOTONIC, &frame_start);
     while(context->close_requested == false) {
         // Poll Xlib events
         while(XPending(context->display)) {
             XEvent event;
             XNextEvent(context->display, &event);
+            log_print(LOG_PLATFORM_VERBOSE, "X event type %i", event.type);
             switch(event.type) {
                 case Expose:
                     break;
                 case ClientMessage: {
                     if((Atom)event.xclient.data.l[0] == wm_delete_window) {
+                        log_print(LOG_INFO, "Close requested by the window manager");
                         context->close_requested = true;
                     }
+                } break;
+                case FocusIn: {
+                    log_print(LOG_PLATFORM, "Window focus gained");
+                } break;
+                case FocusOut: {
+                    log_print(LOG_PLATFORM, "Window focus lost");
                 } break;
                 case ConfigureNotify: {
                     // ConfigureNotify also fires on moves, so only flag real size changes
@@ -610,6 +733,8 @@ i32 main(i32 argc, char** argv) {
                     XGetWindowAttributes(context->display, context->window, &window_attributes);
                     iv2 window_size = iv2_new(window_attributes.width, window_attributes.height);
                     if(!iv2_eq(window_size, context->platform.window_size)) {
+                        log_print(LOG_PLATFORM, "Window resized %ix%i -> %ix%i",
+                                  context->platform.window_size.x, context->platform.window_size.y, window_size.x, window_size.y);
                         context->platform.window_size = window_size;
                         context->platform.window_size_updated_this_frame = true;
                     }
@@ -617,6 +742,9 @@ i32 main(i32 argc, char** argv) {
                 case KeyPress: {
                     u32 keysym = XLookupKeysym(&(event.xkey), 0);
                     PlatformKey key = platform_key_from_xlib_keysym(keysym);
+                    if(key == PLATFORM_KEY_NONE) {
+                        log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: keysym 0x%x", keysym);
+                    }
                     platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYDOWN, .key = key });
                 } break;
                 case KeyRelease: {
@@ -648,17 +776,38 @@ i32 main(i32 argc, char** argv) {
         vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
         context->game.update(game_stack.memory, &render_frame, &context->platform);
 
-        // Update ALSA sound
+        // Update ALSA sound. An underrun (-EPIPE) stops the stream until it's recovered.
         snd_pcm_sframes_t available;
         snd_pcm_sframes_t delay;
-        ALSA_VERIFY(snd_pcm_avail_delay(context->alsa_pcm, &available, &delay));
-        // TODO: Make sure we have enough frames available.
+        i32 avail_result = snd_pcm_avail_delay(context->alsa_pcm, &available, &delay);
+        if(avail_result == -EPIPE) {
+            log_print(LOG_WARN, "ALSA underrun, recovering");
+            ALSA_VERIFY(snd_pcm_recover(context->alsa_pcm, avail_result, 1));
+            ALSA_VERIFY(snd_pcm_avail_delay(context->alsa_pcm, &available, &delay));
+        } else {
+            ALSA_VERIFY(avail_result);
+        }
+        if(frame_count > 0 && delay < AUDIO_LATENCY_FRAMES / 4) {
+            log_print(LOG_WARN, "Audio nearly drained: %li frames queued, target %u", (long)delay, (u32)AUDIO_LATENCY_FRAMES);
+        }
         i32 frames_len = AUDIO_LATENCY_FRAMES - delay;
+        if(frames_len > available) {
+            log_print(LOG_WARN, "ALSA only has room for %li frames, wanted %i", (long)available, frames_len);
+            frames_len = (i32)available;
+        }
+        log_print(LOG_AUDIO_VERBOSE, "ALSA available %li, delay %li, writing %i frames", (long)available, (long)delay, frames_len);
         if(frames_len > 0) {
             f32* samples = (f32*)stack_alloc(&platform_frame_stack, frames_len * AUDIO_BYTES_PER_FRAME);
             context->game.audio_callback(game_stack.memory, samples, frames_len);
-            i32 frames_written = snd_pcm_writei(context->alsa_pcm, samples, frames_len);
-            assert(frames_written == frames_len);
+            snd_pcm_sframes_t frames_written = snd_pcm_writei(context->alsa_pcm, samples, frames_len);
+            if(frames_written == -EPIPE) {
+                log_print(LOG_WARN, "ALSA underrun on write, recovering");
+                ALSA_VERIFY(snd_pcm_recover(context->alsa_pcm, (i32)frames_written, 1));
+            } else if(frames_written < 0) {
+                ALSA_VERIFY((i32)frames_written);
+            } else if(frames_written != frames_len) {
+                log_print(LOG_WARN, "ALSA wrote %li of %i frames", (long)frames_written, frames_len);
+            }
         }
 
         // Render
@@ -669,7 +818,25 @@ i32 main(i32 argc, char** argv) {
         game_library_update(&context->game);
         context->platform.window_size_updated_this_frame = false;
         context->platform.events_len = 0;
+
+        // Frame timing
+        struct timespec frame_end;
+        clock_gettime(CLOCK_MONOTONIC, &frame_end);
+        f64 frame_time = (f64)(frame_end.tv_sec - frame_start.tv_sec) + (f64)(frame_end.tv_nsec - frame_start.tv_nsec) / 1e9;
+        frame_start = frame_end;
+        frame_time_total += frame_time;
+        frame_count++;
+        log_print(LOG_RENDER_VERBOSE, "Frame %" PRIu64 ": %.2f ms", frame_count, frame_time * 1000.0);
     }
+
+    // Shut down
+    log_print(LOG_INFO, "Shutting down after %" PRIu64 " frames, average frame time %.2f ms",
+              frame_count, frame_count > 0 ? frame_time_total / (f64)frame_count * 1000.0 : 0.0);
+    stack_log_usage(&root_stack);
+    stack_log_usage(&game_stack);
+    stack_log_usage(&render_stack);
+    stack_log_usage(&render_scratch_stack);
+    stack_log_usage(&platform_frame_stack);
     return 0;
 }
 #endif

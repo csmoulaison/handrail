@@ -161,11 +161,11 @@ try_pack_again:
     memset(atlas->pixel_buffer, 0, atlas_width * atlas_width * pixel_bytes);
 
     for(i32 i = 0; i < builder->sprites_len; i++) {
-        printf("sprites %d!\n", i);
+        log_print(LOG_ASSET, "Sprite atlas: packing sprite %d", i);
         SpriteTextureList* list = &builder->texture_lists[i];
         SpriteData* sprite      = builder->sprites[i];
         for(i32 j = 0; j < sprite->frames_len; j++) {
-            printf("frame %d\n", j);
+            log_print(LOG_ASSET, "Sprite atlas: sprite %d frame %d", i, j);
             TextureData* tex   = list->textures[j];
             SpriteFrame* frame = &sprite->frames[j];
             for(i32 y = 0; y < tex->height; y++) {

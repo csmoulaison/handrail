@@ -68,7 +68,9 @@ void* asset_builder_push_asset(AssetBuilder* builder, String tag, String type_na
     }
 
     if(type == NULL) {
-        assert(builder->types_len < ASSET_BUILDER_MAX_TYPES);
+        if(builder->types_len >= ASSET_BUILDER_MAX_TYPES) {
+            log_exit("Asset builder: too many asset types (ASSET_BUILDER_MAX_TYPES is %i)", ASSET_BUILDER_MAX_TYPES);
+        }
         type = &builder->types[builder->types_len];
         type->type_name = type_name;
         type->struct_name = struct_name;
@@ -77,9 +79,17 @@ void* asset_builder_push_asset(AssetBuilder* builder, String tag, String type_na
         builder->types_len++;
     }
 
-    assert(type->assets_len < ASSET_BUILDER_MAX_ASSETS_PER_TYPE);
+    if(type->assets_len >= ASSET_BUILDER_MAX_ASSETS_PER_TYPE) {
+        log_exit("Asset builder: too many " STRING_FMT " assets (ASSET_BUILDER_MAX_ASSETS_PER_TYPE is %i)",
+                 STRING_ARG(type_name), ASSET_BUILDER_MAX_ASSETS_PER_TYPE);
+    }
     Asset* asset = &type->assets[type->assets_len];
     type->assets_len++;
+    // Warn once, as the count crosses 90% of the limit
+    if(type->assets_len == ASSET_BUILDER_MAX_ASSETS_PER_TYPE * 9 / 10) {
+        log_print(LOG_WARN, "Asset builder: " STRING_FMT " has %i assets, 90%% of ASSET_BUILDER_MAX_ASSETS_PER_TYPE",
+                  STRING_ARG(type_name), type->assets_len);
+    }
 
     // Stage the data, padded so the next asset stays aligned
     u64 padded_size = (size + ASSET_BUILDER_ALIGNMENT - 1) / ASSET_BUILDER_ALIGNMENT * ASSET_BUILDER_ALIGNMENT;
@@ -92,6 +102,9 @@ void* asset_builder_push_asset(AssetBuilder* builder, String tag, String type_na
     char* dst = stack_alloc(builder->stack, padded_size);
     memcpy(dst, data, size);
     memset(dst + size, 0, padded_size - size);
+
+    log_print(LOG_ASSET, "Asset " STRING_FMT " " STRING_FMT ": %" PRIu64 " bytes (%" PRIu64 " padded) at region offset %" PRIu64,
+              STRING_ARG(type_name), STRING_ARG(tag), size, padded_size, asset->region_offset);
 
     if(out_region_offset != NULL) {
         *out_region_offset = asset->region_offset;
@@ -122,8 +135,11 @@ void asset_builder_output_pack(AssetBuilder* builder, String path) {
             Asset* asset = &type->assets[j];
             memcpy(&pack[region_start + asset->region_offset], &builder->stack->memory[asset->stack_offset], asset->size);
         }
+        log_print(LOG_ASSET, "Pack region " STRING_FMT ": %i assets, offset %" PRIu64 ", %" PRIu64 " bytes",
+                  STRING_ARG(type->type_name), type->assets_len, region_start, type->region_size);
         region_start += type->region_size;
     }
+    log_print(LOG_ASSET, "Writing pack " STRING_FMT ": %i types, %" PRIu64 " bytes", STRING_ARG(path), builder->types_len, pack_size);
 
     // Write it in the format the platform's linker embeds
 #if PLATFORM == PLATFORM_WINDOWS

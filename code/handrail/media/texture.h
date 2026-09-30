@@ -108,7 +108,7 @@ TextureData* texture_from_bmp(File* file, Stack* stack) {
 
     assert(info.reserved == 0);
     assert(info.signature == 0x4D42); // 'BM'
-    printf("bit per pixel: %d\n", info.bits_per_pixel);
+    log_print(LOG_ASSET, "BMP: %u bits per pixel", (u32)info.bits_per_pixel);
     assert(info.bits_per_pixel == 32);
     assert(info.compression == 0);
 
@@ -216,8 +216,7 @@ u64 texture_push_asset(AssetBuilder* builder, String tag, TextureData* texture, 
             pixels_size = pixels_len;
         } break;
         default: {
-            fprintf(stderr, "texture_push_asset: unsupported texture format %u\n", texture->format);
-            panic();
+            log_exit("texture_push_asset: unsupported texture format %u", texture->format);
         }
     }
 

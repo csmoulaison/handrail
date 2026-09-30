@@ -250,8 +250,7 @@ void string_replace_substring(String* dst, String original, String replacement) 
 
 void string_write(String* dst, char* src, u64 len) {
     if(dst->len + len > dst->capacity) {
-        fprintf(stderr, "String capacity overflow. Capacity: %" PRIu64 ", Write len: %" PRIu64 "\n", dst->capacity, len);
-        panic();
+        log_exit("String capacity overflow. Capacity: %" PRIu64 ", Write len: %" PRIu64, dst->capacity, len);
     }
     memcpy(&dst->text[dst->len], src, len);
     dst->len += len;
@@ -312,9 +311,8 @@ static u64 string_format_emit(String* dst, char* chars, u64 len) {
 }
 
 static void string_format_mismatch(String format, char specifier, i32 arg_index) {
-    fprintf(stderr, "string_format: argument %i doesn't match specifier '%%%c' in format \"" STRING_FMT "\"\n",
+    log_exit("string_format: argument %i doesn't match specifier '%%%c' in format \"" STRING_FMT "\"",
             arg_index, specifier, STRING_ARG(format));
-    panic();
 }
 
 // Walk the format, writing to dst unless it's NULL. Returns the formatted length,
@@ -335,8 +333,7 @@ static u64 string_format_walk(String* dst, StringFormatArg* args, i32 args_len) 
         // Read the specifier
         i++;
         if(i == format.len) {
-            fprintf(stderr, "string_format: format ends with '%%': \"" STRING_FMT "\"\n", STRING_ARG(format));
-            panic();
+            log_exit("string_format: format ends with '%%': \"" STRING_FMT "\"", STRING_ARG(format));
         }
         char specifier = format.text[i];
         if(specifier == '%') {
@@ -344,8 +341,7 @@ static u64 string_format_walk(String* dst, StringFormatArg* args, i32 args_len) 
             continue;
         }
         if(arg_index >= args_len) {
-            fprintf(stderr, "string_format: too few arguments for format \"" STRING_FMT "\"\n", STRING_ARG(format));
-            panic();
+            log_exit("string_format: too few arguments for format \"" STRING_FMT "\"", STRING_ARG(format));
         }
         StringFormatArg arg = args[arg_index];
 
@@ -375,17 +371,15 @@ static u64 string_format_walk(String* dst, StringFormatArg* args, i32 args_len) 
                 len += string_format_emit(dst, buf, buf_len);
             } break;
             default: {
-                fprintf(stderr, "string_format: unknown specifier '%%%c' in format \"" STRING_FMT "\"\n",
+                log_exit("string_format: unknown specifier '%%%c' in format \"" STRING_FMT "\"",
                         specifier, STRING_ARG(format));
-                panic();
             } break;
         }
         arg_index++;
     }
     if(arg_index != args_len) {
-        fprintf(stderr, "string_format: %i arguments given, format \"" STRING_FMT "\" uses %i\n",
+        log_exit("string_format: %i arguments given, format \"" STRING_FMT "\" uses %i",
                 args_len - 1, STRING_ARG(format), arg_index - 1);
-        panic();
     }
     return len;
 }
@@ -447,11 +441,9 @@ i64 string_read_int_token(StringReader* reader, char delimiter) {
     i64 n = strtol(tmp.text, &end, 10);
     errno = 0;
     if (end == tmp.text) {
-        fprintf(stderr, "Could not read int token. No digits found.\n");
-        panic();
+        log_exit("Could not read int token. No digits found.");
     } else if (errno == ERANGE || n > INT_MAX || n < INT_MIN) {
-        fprintf(stderr, "Error: Value out of range for an int.\n");
-        panic();
+        log_exit("Error: Value out of range for an int.");
     }
     return n;
 }
@@ -463,8 +455,7 @@ f64 string_read_float_token(StringReader* reader, char delimiter) {
     char* end;
     f64 n = strtof(tmp.text, &end);
     if (end == tmp.text) {
-        fprintf(stderr, "Could not read float token.\n");
-        panic();
+        log_exit("Could not read float token.");
     }
     return n;
     panic(); 

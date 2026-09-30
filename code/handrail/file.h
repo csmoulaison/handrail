@@ -16,7 +16,10 @@ bool file_try_open(String fname, FileOpenMode mode, File* out);
 void file_close(File* file);
 u64 file_size(File* file);
 u64 file_last_modified(File* file);
+// Returns 0 if the file doesn't exist
 u64 file_path_last_modified(String path);
+// Returns 0 if the file doesn't exist
+u64 file_path_size(String path);
 String* file_names_in_directory(String path, i32* out_path_count, Stack* stack);
 String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack);
 
@@ -52,7 +55,9 @@ void file_peek_string_token(File* file, String* dst, char delimiter);
 
 File file_open(String fname, FileOpenMode mode) {
     File file;
-    assert(file_try_open(fname, mode, &file));
+    if(!file_try_open(fname, mode, &file)) {
+        log_exit("Couldn't open file " STRING_FMT " (mode %i)", STRING_ARG(fname), mode);
+    }
     return file;
 }
 
@@ -74,8 +79,7 @@ bool file_try_open(String fname, FileOpenMode mode, File* out) {
             handle = fopen(fname_cstring.text, "r+b");
         } break;
         default: {
-            fprintf(stderr, "File open mode %i not valid.", mode);
-            panic();
+            log_exit("File open mode %i not valid.", mode);
         } break;
     }
     if(handle == NULL) {
@@ -110,7 +114,9 @@ u64 file_path_last_modified(String path) {
     string_cat(&cpath, path);
     string_write_null_terminator(&cpath);
     struct stat file_stat;
-    stat(cpath.text, &file_stat);
+    if(stat(cpath.text, &file_stat) != 0) {
+        return 0;
+    }
     return file_stat.st_mtim.tv_sec;
 #elif PLATFORM == PLATFORM_WINDOWS
     char* buf = alloca(path.len + 1);
@@ -124,6 +130,29 @@ u64 file_path_last_modified(String path) {
     return ((u64)attributes.ftLastWriteTime.dwHighDateTime << 32) | (u64)attributes.ftLastWriteTime.dwLowDateTime;
 #elif PLATFORM == PLATFORM_WEB
     // TODO: Web implementation
+#endif
+}
+
+u64 file_path_size(String path) {
+    char* buf = alloca(path.len + 1);
+    String cpath = string_init(buf, path.len + 1);
+    string_cat(&cpath, path);
+    string_write_null_terminator(&cpath);
+#if PLATFORM == PLATFORM_LINUX
+    struct stat file_stat;
+    if(stat(cpath.text, &file_stat) != 0) {
+        return 0;
+    }
+    return (u64)file_stat.st_size;
+#elif PLATFORM == PLATFORM_WINDOWS
+    WIN32_FILE_ATTRIBUTE_DATA attributes;
+    if(!GetFileAttributesExA(cpath.text, GetFileExInfoStandard, &attributes)) {
+        return 0;
+    }
+    return ((u64)attributes.nFileSizeHigh << 32) | (u64)attributes.nFileSizeLow;
+#elif PLATFORM == PLATFORM_WEB
+    // TODO: Web implementation
+    return 0;
 #endif
 }
 
@@ -334,11 +363,9 @@ i64 file_read_int_token(File* file, char delimiter) {
     i64 n = strtol(tmp.text, &end, 10);
     errno = 0;
     if (end == tmp.text) {
-        fprintf(stderr, "Could not read int token. No digits found.\n");
-        panic();
+        log_exit("Could not read int token. No digits found.");
     } else if (errno == ERANGE || n > INT_MAX || n < INT_MIN) {
-        fprintf(stderr, "Could not read int token. Value out of range for an int.\n");
-        panic();
+        log_exit("Could not read int token. Value out of range for an int.");
     }
     return n;
 }
@@ -350,8 +377,7 @@ f64 file_read_float_token(File* file, char delimiter) {
     char* end;
     f64 n = strtof(tmp.text, &end);
     if (end == tmp.text) {
-        fprintf(stderr, "Could not read float token.\n");
-        panic();
+        log_exit("Could not read float token.");
     }
     return n;
 }

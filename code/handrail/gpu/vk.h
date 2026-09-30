@@ -160,7 +160,7 @@ static i32 vk_memory_type_index(VkContext* vk, u32 type_bits, VkMemoryPropertyFl
 
 // Allocate an arena. With buffer_usage set, it is wrapped in one buffer with a
 // device address. Memory flags are tried in order until one is available.
-static VkArena vk_arena_new(VkContext* vk, u64 size, u32 type_bits, VkBufferUsageFlags buffer_usage, VkMemoryPropertyFlags* flags, i32 flags_len) {
+static VkArena vk_arena_new(VkContext* vk, char* name, u64 size, u32 type_bits, VkBufferUsageFlags buffer_usage, VkMemoryPropertyFlags* flags, i32 flags_len) {
     VkArena arena = {};
     arena.size = size;
 
@@ -178,12 +178,22 @@ static VkArena vk_arena_new(VkContext* vk, u64 size, u32 type_bits, VkBufferUsag
     }
 
     i32 memory_type = -1;
+    i32 flags_index = 0;
     VkMemoryPropertyFlags memory_flags = 0;
     for(i32 i = 0; i < flags_len && memory_type == -1; i++) {
         memory_type = vk_memory_type_index(vk, requirements.memoryTypeBits, flags[i]);
         memory_flags = flags[i];
+        flags_index = i;
     }
-    assert(memory_type != -1);
+    if(memory_type == -1) {
+        log_exit("Vulkan: no memory type for arena %s (%" PRIu64 " bytes)", name, (u64)requirements.size);
+    }
+    if(flags_index > 0) {
+        log_print(LOG_RENDER, "Vulkan: arena %s fell back to memory flags 0x%x (preferred 0x%x)",
+                  name, (u32)memory_flags, (u32)flags[0]);
+    }
+    log_print(LOG_RENDER, "Vulkan: arena %s, %" PRIu64 " bytes, memory type %i, flags 0x%x, buffer usage 0x%x",
+              name, (u64)requirements.size, memory_type, (u32)memory_flags, (u32)buffer_usage);
 
     VkMemoryAllocateFlagsInfo allocate_flags = {};
     allocate_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
@@ -267,8 +277,9 @@ static VkImageView vk_image_view_new(VkContext* vk, VkImage image, VkFormat form
     return view;
 }
 
-// Create (or recreate) the swapchain, its views, and the depth buffer.
-static void vk_swapchain_create(VkContext* vk, iv2 window_size) {
+// Create (or recreate) the swapchain, its views, and the depth buffer. reason
+// is only logged.
+static void vk_swapchain_create(VkContext* vk, iv2 window_size, char* reason) {
     VkSwapchainKHR old_swapchain = vk->swapchain;
     if(old_swapchain != VK_NULL_HANDLE) {
         VK_VERIFY(vkDeviceWaitIdle(vk->device));
@@ -350,10 +361,12 @@ static void vk_swapchain_create(VkContext* vk, iv2 window_size) {
     VkMemoryRequirements depth_requirements;
     vkGetImageMemoryRequirements(vk->device, vk->depth_image, &depth_requirements);
     VkMemoryPropertyFlags depth_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    vk->depth_arena = vk_arena_new(vk, depth_requirements.size, depth_requirements.memoryTypeBits, 0, &depth_flags, 1);
+    vk->depth_arena = vk_arena_new(vk, "depth", depth_requirements.size, depth_requirements.memoryTypeBits, 0, &depth_flags, 1);
     VK_VERIFY(vkBindImageMemory(vk->device, vk->depth_image, vk->depth_arena.memory, 0));
     vk->depth_view = vk_image_view_new(vk, vk->depth_image, VK_DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT);
 
+    log_print(LOG_RENDER, "Vulkan: swapchain created (%s). %ux%u, %u images, format %i, present mode FIFO",
+              reason, extent.width, extent.height, vk->swapchain_images_len, (i32)vk->swapchain_format);
     vk->swapchain_stale = false;
 }
 
@@ -375,7 +388,9 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
             validation = true;
         }
     }
-    if(!validation) {
+    if(validation) {
+        log_print(LOG_RENDER, "Vulkan validation layer enabled");
+    } else {
         log_print(LOG_WARN, "Vulkan validation layer requested but not installed");
     }
 #endif
@@ -391,6 +406,9 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
 #endif
     if(validation) {
         extensions[extensions_len++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    }
+    for(i32 i = 0; i < extensions_len; i++) {
+        log_print(LOG_RENDER, "Vulkan instance extension: %s", extensions[i]);
     }
 
     // Instance
@@ -450,7 +468,11 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     for(i32 i = 0; i < devices_len; i++) {
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(devices[i], &properties);
-        if(properties.apiVersion < VK_API_VERSION_1_3) continue;
+        if(properties.apiVersion < VK_API_VERSION_1_3) {
+            log_print(LOG_RENDER, "Vulkan: skipping %s, API version %u.%u is below 1.3", properties.deviceName,
+                      VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion));
+            continue;
+        }
 
         u32 families_len = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &families_len, NULL);
@@ -464,7 +486,10 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
                 family = j;
             }
         }
-        if(family == -1) continue;
+        if(family == -1) {
+            log_print(LOG_RENDER, "Vulkan: skipping %s, no queue family can both draw and present", properties.deviceName);
+            continue;
+        }
 
         i32 score = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 1;
         if(score > best_score) {
@@ -479,6 +504,10 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     VkPhysicalDeviceProperties device_properties;
     vkGetPhysicalDeviceProperties(vk->physical_device, &device_properties);
     log_print(LOG_RENDER, "Vulkan device: %s", device_properties.deviceName);
+    log_print(LOG_RENDER, "Vulkan device: type %i, API %u.%u.%u, driver 0x%x, queue family %u",
+              (i32)device_properties.deviceType,
+              VK_API_VERSION_MAJOR(device_properties.apiVersion), VK_API_VERSION_MINOR(device_properties.apiVersion),
+              VK_API_VERSION_PATCH(device_properties.apiVersion), device_properties.driverVersion, vk->queue_family);
 
     // Device
     f32 queue_priority = 1.0f;
@@ -533,7 +562,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
             break;
         }
     }
-    vk_swapchain_create(vk, window_size);
+    vk_swapchain_create(vk, window_size, "initial");
 
     // Command pool and frames in flight
     VkCommandPoolCreateInfo pool_info = {};
@@ -548,7 +577,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
     };
-    vk->host_arena = vk_arena_new(vk, VK_FRAMES_IN_FLIGHT * VK_FRAME_MEMORY_SIZE, 0xFFFFFFFF,
+    vk->host_arena = vk_arena_new(vk, "host frames", VK_FRAMES_IN_FLIGHT * VK_FRAME_MEMORY_SIZE, 0xFFFFFFFF,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, host_flags, 2);
 
     for(i32 i = 0; i < VK_FRAMES_IN_FLIGHT; i++) {
@@ -585,7 +614,7 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
     for(i32 i = 0; i < setup->buffer_regions_len; i++) {
         regions_size += (setup->buffer_regions[i].size + 255) / 256 * 256;
     }
-    vk->buffer_arena = vk_arena_new(vk, regions_size > 0 ? regions_size : 256, 0xFFFFFFFF,
+    vk->buffer_arena = vk_arena_new(vk, "buffer regions", regions_size > 0 ? regions_size : 256, 0xFFFFFFFF,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &device_flags, 1);
 
     // Texture images, packed into one device-local allocation
@@ -619,7 +648,7 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
         textures_type_bits &= requirements.memoryTypeBits;
     }
     if(setup->textures_len > 0) {
-        vk->image_arena = vk_arena_new(vk, textures_memory_size, textures_type_bits, 0, &device_flags, 1);
+        vk->image_arena = vk_arena_new(vk, "textures", textures_memory_size, textures_type_bits, 0, &device_flags, 1);
         for(i32 i = 0; i < setup->textures_len; i++) {
             VK_VERIFY(vkBindImageMemory(vk->device, vk->textures[i], vk->image_arena.memory, texture_memory_offsets[i]));
             vk->texture_views[i] = vk_image_view_new(vk, vk->textures[i], texture_formats[i], VK_IMAGE_ASPECT_COLOR_BIT);
@@ -628,7 +657,9 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
 
     // Stage everything in one host-visible buffer
     VkMemoryPropertyFlags staging_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    VkArena staging = vk_arena_new(vk, regions_size + textures_pixels_size + 16, 0xFFFFFFFF,
+    log_print(LOG_RENDER, "Vulkan: loading %u buffer regions (%" PRIu64 " bytes), %u textures (%" PRIu64 " pixel bytes), %u samplers, %u passes",
+              setup->buffer_regions_len, regions_size, setup->textures_len, textures_pixels_size, setup->samplers_len, setup->passes_len);
+    VkArena staging = vk_arena_new(vk, "staging", regions_size + textures_pixels_size + 16, 0xFFFFFFFF,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &staging_flags, 1);
 
     VkCommandBufferAllocateInfo command_buffer_info = {};
@@ -890,6 +921,8 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
         pipeline_info.pDynamicState       = &dynamic;
         pipeline_info.layout              = vk->pipeline_layout;
         VK_VERIFY(vkCreateGraphicsPipelines(vk->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &vk->pipelines[i]));
+        log_print(LOG_RENDER, "Vulkan: pipeline %i created (blend %i, cull %i, depth test %i, depth write %i)",
+                  i, (i32)pass->blend, (i32)pass->cull, (i32)pass->depth_test, (i32)pass->depth_write);
 
         vkDestroyShaderModule(vk->device, modules[0], NULL);
         vkDestroyShaderModule(vk->device, modules[1], NULL);
@@ -903,18 +936,20 @@ void vk_frame_begin(VkContext* vk, iv2 window_size, bool window_resized, RenderF
 
     // Acquire a swapchain image, recreating the swapchain when it no longer fits the window
     if(window_resized || vk->swapchain_stale) {
-        vk_swapchain_create(vk, window_size);
+        vk_swapchain_create(vk, window_size, window_resized ? "window resized" : "stale");
     }
     VkResult result = vkAcquireNextImageKHR(vk->device, vk->swapchain, UINT64_MAX, frame->image_acquired, VK_NULL_HANDLE, &vk->image_index);
     if(result == VK_ERROR_OUT_OF_DATE_KHR) {
-        vk_swapchain_create(vk, window_size);
+        vk_swapchain_create(vk, window_size, "acquire out of date");
         result = vkAcquireNextImageKHR(vk->device, vk->swapchain, UINT64_MAX, frame->image_acquired, VK_NULL_HANDLE, &vk->image_index);
     }
     if(result == VK_SUBOPTIMAL_KHR) {
+        log_print(LOG_RENDER, "Vulkan: acquire suboptimal, recreating swapchain next frame");
         vk->swapchain_stale = true;
     } else {
         VK_VERIFY(result);
     }
+    log_print(LOG_RENDER_VERBOSE, "Vulkan: frame %u acquired image %u", vk->frame_index, vk->image_index);
     VK_VERIFY(vkResetFences(vk->device, 1, &frame->fence));
 
     // Hand the game this frame's slice of mapped memory
@@ -993,6 +1028,7 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
     vkCmdPushConstants(command_buffer, vk->pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(RenderPushConstants), &push);
     for(i32 i = 0; i < vk->pipelines_len; i++) {
         u32 commands_len = render_frame->commands_len[i];
+        log_print(LOG_RENDER_VERBOSE, "Vulkan: pass %i, %u draw commands", i, commands_len);
         if(commands_len == 0) continue;
         assert(commands_len <= RENDER_FRAME_MAX_COMMANDS);
         u64 commands_offset = frame->memory_offset + RENDER_FRAME_GLOBALS_SIZE + RENDER_FRAME_INSTANCES_SIZE
@@ -1039,6 +1075,8 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
     present_info.pImageIndices      = &vk->image_index;
     VkResult result = vkQueuePresentKHR(vk->queue, &present_info);
     if(result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        log_print(LOG_RENDER, "Vulkan: present %s, recreating swapchain next frame",
+                  result == VK_SUBOPTIMAL_KHR ? "suboptimal" : "out of date");
         vk->swapchain_stale = true;
     } else {
         VK_VERIFY(result);

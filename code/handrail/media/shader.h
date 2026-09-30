@@ -42,9 +42,10 @@ u64 shader_push_asset(AssetBuilder* builder, String tag, String glsl_path, Shade
     string_cat(&cmd, string_const(" -o " SHADER_SPIRV_TMP_PATH " "));
     string_cat(&cmd, glsl_path);
     string_write_null_terminator(&cmd);
-    if(system(cmd.text) != 0) {
-        fprintf(stderr, "Shader compilation failed: %.*s\n", (int)glsl_path.len, glsl_path.text);
-        panic();
+    log_print(LOG_ASSET, "Compiling shader: %s", cmd.text);
+    i32 exit_code = system(cmd.text);
+    if(exit_code != 0) {
+        log_exit("Shader compilation failed with exit code %i: " STRING_FMT, exit_code, STRING_ARG(glsl_path));
     }
 
     // Read the SPIR-V back and push it

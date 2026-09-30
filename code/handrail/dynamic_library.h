@@ -5,6 +5,8 @@ typedef struct {
     void*  handle;
     String path;
     u64    last_modified;
+    // Times the library has been loaded, including the first load
+    u32    load_count;
 } DynamicLibrary;
 
 void  dynamic_library_init(DynamicLibrary* lib, String path);
@@ -20,6 +22,7 @@ void dynamic_library_init(DynamicLibrary* lib, String path) {
     lib->handle = NULL;
     lib->path = path;
     lib->last_modified = 0;
+    lib->load_count = 0;
 }
 
 bool dynamic_library_update(DynamicLibrary* lib) {
@@ -30,6 +33,15 @@ bool dynamic_library_update(DynamicLibrary* lib) {
 
     u64 actual_last_modified = file_path_last_modified(path_cstr);
     if(actual_last_modified > lib->last_modified) {
+        // The build may still be writing the library. Leave last_modified alone
+        // so the next update tries again.
+        if(file_path_size(lib->path) == 0) {
+            log_print(LOG_HOT_RELOAD, STRING_FMT " is empty, likely still being written. Retrying next update",
+                      STRING_ARG(lib->path));
+            return false;
+        }
+        log_print(LOG_HOT_RELOAD, "Change detected in " STRING_FMT " (modified %" PRIu64 " -> %" PRIu64 ")",
+                  STRING_ARG(lib->path), lib->last_modified, actual_last_modified);
         if(lib->last_modified != 0) {
 #if PLATFORM == PLATFORM_LINUX
             dlclose(lib->handle);
@@ -65,14 +77,16 @@ bool dynamic_library_update(DynamicLibrary* lib) {
 #if PLATFORM == PLATFORM_LINUX
         char cmd[512];
         sprintf(cmd, "cp %s %s", path_cstr.text, copy_cstr.text);
-        system(cmd);
+        if(system(cmd) != 0) {
+            log_exit("Couldn't copy %s to %s", path_cstr.text, copy_cstr.text);
+        }
 
         lib->handle = dlopen(copy_cstr.text, RTLD_NOW);
-        char* err;
-        if((err = dlerror()) != NULL) {
-            fprintf(stderr, "dlerror: %s\n", err);
+        if(lib->handle == NULL) {
+            log_exit("Couldn't load %s: %s", copy_cstr.text, dlerror());
         }
-        assert(lib->handle != NULL);
+        lib->load_count++;
+        log_print(LOG_HOT_RELOAD, "Loaded copy %s (load %u)", copy_cstr.text, lib->load_count);
         return true;
 #elif PLATFORM == PLATFORM_WINDOWS
         if(!CopyFileA(path_cstr.text, copy_cstr.text, FALSE)) {
@@ -82,6 +96,8 @@ bool dynamic_library_update(DynamicLibrary* lib) {
         if(lib->handle == NULL) {
             log_exit("Couldn't load %s (error %lu)", copy_cstr.text, GetLastError());
         }
+        lib->load_count++;
+        log_print(LOG_HOT_RELOAD, "Loaded copy %s (load %u)", copy_cstr.text, lib->load_count);
         return true;
 #elif PLATFORM == PLATFORM_WEB
         // TODO: Implement web
@@ -100,8 +116,7 @@ void* dynamic_library_load_function(DynamicLibrary lib, String name) {
     void* ptr = dlsym(lib.handle, cstr.text);
     char* err;
     if((err = dlerror()) != NULL) {
-        printf("dlerror: %s\n", err);
-        panic();
+        log_exit("Couldn't load function %s: %s", cstr.text, err);
     }
     return ptr;
 #elif PLATFORM == PLATFORM_WINDOWS

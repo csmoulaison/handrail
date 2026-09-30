@@ -57,7 +57,12 @@ void platform_push_event(Platform* platform, PlatformEvent event);
 #define handrail_platform_h_IMPLEMENTED
 
 void platform_push_event(Platform* platform, PlatformEvent event) {
-    assert(platform->events_len < PLATFORM_MAX_EVENTS_PER_FRAME);
+    if(platform->events_len >= PLATFORM_MAX_EVENTS_PER_FRAME) {
+        log_print(LOG_WARN, "Platform event queue full (PLATFORM_MAX_EVENTS_PER_FRAME is %i). Dropping event type %i",
+                  PLATFORM_MAX_EVENTS_PER_FRAME, (i32)event.type);
+        return;
+    }
+    log_print(LOG_PLATFORM_VERBOSE, "Event pushed: type %i, key %i", (i32)event.type, (i32)event.key);
     platform->events[platform->events_len] = event;
     platform->events_len++;
 }

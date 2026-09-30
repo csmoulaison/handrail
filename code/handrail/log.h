@@ -21,6 +21,13 @@
 #define LOG_HOT_RELOAD (1ull << 7)
 #define LOG_MEMORY     (1ull << 8)
 
+// Verbose engine layers, for events that fire every frame or every allocation.
+// Each pairs with the base layer above and is off by default.
+#define LOG_MEMORY_VERBOSE   (1ull << 9)
+#define LOG_RENDER_VERBOSE   (1ull << 10)
+#define LOG_AUDIO_VERBOSE    (1ull << 11)
+#define LOG_PLATFORM_VERBOSE (1ull << 12)
+
 #define LOG_ENGINE_LAYERS_LEN 32
 #define LOG_ENGINE_ALL        0x00000000FFFFFFFFull
 #define LOG_GAME_ALL          0xFFFFFFFF00000000ull
@@ -50,7 +57,7 @@
 #endif
 
 #ifndef LOG_LAYER_NAME_MAX
-#define LOG_LAYER_NAME_MAX 16
+#define LOG_LAYER_NAME_MAX 24
 #endif
 
 // Helpers for printing a String with a %-format: log_print(LOG_INFO, "name: " STRING_FMT, STRING_ARG(name));
@@ -84,6 +91,9 @@ void log_bind(Log* log);
 void log_set_layer_name(u64 layer, String name);
 // Use log_print rather than calling this directly.
 void log_write(u64 layer, char* file, i32 line, char* format, ...) LOG_PRINTF_FORMAT(4, 5);
+// Write text as is to the bound log's targets, with no layer prefix or added
+// newline. Ignores LOG_MASK. Used for multi-line output like callstacks.
+void log_write_raw(u64 layer, char* text, u64 len);
 
 #endif
 
@@ -96,6 +106,7 @@ static Log* log_global = NULL;
 
 static char* log_engine_layer_names[LOG_ENGINE_LAYERS_LEN] = {
     "error", "warn", "info", "platform", "audio", "render", "asset", "hot_reload", "memory",
+    "memory_verbose", "render_verbose", "audio_verbose", "platform_verbose",
 };
 
 static i32 log_layer_index(u64 layer) {
@@ -176,16 +187,18 @@ void log_write(u64 layer, char* file, i32 line, char* format, ...) {
     }
     buf[len++] = '\n';
     buf[len] = '\0';
+    log_write_raw(layer, buf, len);
+}
 
-    // Write to targets
+void log_write_raw(u64 layer, char* text, u64 len) {
     u32 targets = log_global != NULL ? log_global->targets : LOG_TARGET_STDOUT;
     if(targets & LOG_TARGET_STDOUT) {
         FILE* stream = (layer & (LOG_ERROR | LOG_WARN)) ? stderr : stdout;
-        fwrite(buf, 1, len, stream);
+        fwrite(text, 1, len, stream);
         fflush(stream);
     }
     if(targets & LOG_TARGET_FILE) {
-        fwrite(buf, 1, len, log_global->file.handle);
+        fwrite(text, 1, len, log_global->file.handle);
         fflush(log_global->file.handle);
     }
 }
