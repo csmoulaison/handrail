@@ -205,7 +205,7 @@ void string_read_string_token(StringReader* reader, String* dst, char delimiter)
     return;
 }
 
-// NOTO: factor int/float conversions into string_to_* functions.
+// TODO: factor int/float conversions into string_to_* functions.
 // See also file.h todo.
 i64 string_read_int_token(StringReader* reader, char delimiter) {
     String tmp = string_init((char[256]){}, 256);

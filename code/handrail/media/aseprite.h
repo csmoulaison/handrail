@@ -84,7 +84,7 @@ AsepriteData textures_from_aseprite(String path, String tag, String bmp_dir, Sta
     file_read(&file, &header, sizeof(AsepriteHeader));
     assert(header.magic_number == 0xA5E0);
 
-    // NOTO: Check user data for origin?
+    // TODO: Check user data for origin?
     result.origin = iv2_new(0, 0); 
     result.frame_count = header.frame_count;
     result.frame_durations = (f32*)stack_alloc(stack, result.frame_count * sizeof(f32));

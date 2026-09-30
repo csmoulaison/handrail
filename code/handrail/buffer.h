@@ -1,7 +1,7 @@
 #ifndef handrail_buffer_h_INCLUDED
 #define handrail_buffer_h_INCLUDED
 
-// NOTO: Debug build code for tracking suballocations.
+// TODO: Debug build code for tracking suballocations.
 
 #ifndef BUFFER_DEBUG
 #define BUFFER_DEBUG false

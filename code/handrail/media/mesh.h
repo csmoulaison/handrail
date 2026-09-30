@@ -40,13 +40,13 @@ u64              primitive_2d_size(Primitive2dData* primitive);
 
 #define PRIMITIVE_2D_QUAD_VERTICES_LEN 6
 f32 primitive_2d_quad_vertices[PRIMITIVE_2D_QUAD_VERTICES_LEN * 2] = {
-	 1.0,  1.0,
-	 1.0, -1.0,
-	-1.0,  1.0,
+     1.0,  1.0,
+     1.0, -1.0,
+    -1.0,  1.0,
 
-	 1.0, -1.0,
-	-1.0, -1.0,
-	-1.0,  1.0
+     1.0, -1.0,
+    -1.0, -1.0,
+    -1.0,  1.0
 };
 
 #ifdef CSM_IMPLEMENTATION
@@ -99,11 +99,11 @@ MeshData* mesh_from_obj(File* file, Stack* stack) {
     i64 f_count = 0;
     i64 obj_i = 0;
 
-	while(file_at_end(file) == false) {
+    while(file_at_end(file) == false) {
         String token = string_init((char[4096]){}, 4096);
         file_read_string_token(file, &token, ' ');
         if(string_equals(token, string_const("v"))) {
-        	v_count++;
+            v_count++;
         } else if(string_equals(token, string_const("vt"))) {
             vt_count++;
         } else if(string_equals(token, string_const("vn"))) {
@@ -111,7 +111,7 @@ MeshData* mesh_from_obj(File* file, Stack* stack) {
         } else if(string_equals(token, string_const("f"))) {
             f_count++;
         }
-    	file_read_line(file, NULL);
+        file_read_line(file, NULL);
     }
 
     // Allocate line data buffers
@@ -135,15 +135,15 @@ MeshData* mesh_from_obj(File* file, Stack* stack) {
         String token = string_init((char[4096]){}, 4096);
         file_read_string_token(file, &token, ' ');
         if(string_equals(token, string_const("v"))) {
-        	_mesh_read_float_vector(file, verts[verts_len].comps, 3);
+            _mesh_read_float_vector(file, verts[verts_len].comps, 3);
             verts_len++;
         } else if(string_equals(token, string_const("vt"))) {
-        	v2* uv = &uvs[uvs_len];
-        	_mesh_read_float_vector(file, uv->comps, 2);
-        	//uv->y = 1.0f - uv->y;
+            v2* uv = &uvs[uvs_len];
+            _mesh_read_float_vector(file, uv->comps, 2);
+            //uv->y = 1.0f - uv->y;
             uvs_len++;
         } else if(string_equals(token, string_const("vn"))) {
-        	_mesh_read_float_vector(file, norms[norms_len].comps, 3);
+            _mesh_read_float_vector(file, norms[norms_len].comps, 3);
             norms_len++;
         } else if(string_equals(token, string_const("f"))) {
             String line = string_init((char[4096]){}, 4096);
@@ -159,7 +159,7 @@ MeshData* mesh_from_obj(File* file, Stack* stack) {
             }
             string_write_null_terminator(&line);
         } else {
-        	file_read_line(file, NULL);
+            file_read_line(file, NULL);
         }
     }
 
@@ -168,19 +168,19 @@ MeshData* mesh_from_obj(File* file, Stack* stack) {
     mesh->vertices_len = face_verts_len; // = verts_len in indexed case
     // indices_len would go here
      
-	for(i64 i = 0; i < face_verts_len; i++) {
-    	_MeshObjFaceVertex face_vert = face_verts[i];
-    	// face line indices are 0 indexed for some reason, so we sub 1.
-    	i64 vert_index = face_vert.position - 1;
-    	i64 uv_index   = face_vert.uv - 1;
-    	i64 norm_index = face_vert.normal - 1;
+    for(i64 i = 0; i < face_verts_len; i++) {
+        _MeshObjFaceVertex face_vert = face_verts[i];
+        // face line indices are 0 indexed for some reason, so we sub 1.
+        i64 vert_index = face_vert.position - 1;
+        i64 uv_index   = face_vert.uv - 1;
+        i64 norm_index = face_vert.normal - 1;
 
         // For flat shaded, not indexed
         MeshVertexData* mesh_vert = &mesh->vertices[i];
         mesh_vert->position = verts[vert_index];
         mesh_vert->uv = uvs[uv_index];
         mesh_vert->normal = norms[norm_index];
-	}
+    }
     return mesh;
 }
 

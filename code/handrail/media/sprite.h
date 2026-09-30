@@ -89,103 +89,103 @@ void sprite_atlas_push_sprite(SpriteAtlasBuilder* builder, String tag, TextureDa
 
 void sprite_atlas_build_assets(SpriteAtlasBuilder* builder, AssetBuilder* pack_builder, Stack* stack) {
     // Sort sprites by height.
-	u32* pack_order = (u32*)alloca(builder->sprites_len);
-	for(u32 i = 0; i < builder->sprites_len; i++) {
-    	pack_order[i] = i;
-	}
+    u32* pack_order = (u32*)alloca(builder->sprites_len);
+    for(u32 i = 0; i < builder->sprites_len; i++) {
+        pack_order[i] = i;
+    }
 
-	for(u32 i = 0; i < builder->sprites_len; i++) {
-		for(i32 j = 0; j < builder->sprites_len - 1; j++) {
-    		TextureData* tex_a0 = builder->texture_lists[pack_order[j]].textures[0];
-    		TextureData* tex_b0 = builder->texture_lists[pack_order[j + 1]].textures[0];
-			if(tex_a0->height < tex_b0->height) {
-				u32 tmp = pack_order[j];
-				pack_order[j] = pack_order[j + 1];
-				pack_order[j + 1] = tmp;
-			}
-		}
-	}
+    for(u32 i = 0; i < builder->sprites_len; i++) {
+        for(i32 j = 0; j < builder->sprites_len - 1; j++) {
+            TextureData* tex_a0 = builder->texture_lists[pack_order[j]].textures[0];
+            TextureData* tex_b0 = builder->texture_lists[pack_order[j + 1]].textures[0];
+            if(tex_a0->height < tex_b0->height) {
+                u32 tmp = pack_order[j];
+                pack_order[j] = pack_order[j + 1];
+                pack_order[j + 1] = tmp;
+            }
+        }
+    }
 
-	// Pack sprites with shelf algorithm.
-	u32 atlas_width = 64;
+    // Pack sprites with shelf algorithm.
+    u32 atlas_width = 64;
 try_pack_again:
-	atlas_width *= 2;
-	u32 atlas_area = atlas_width * atlas_width;
+    atlas_width *= 2;
+    u32 atlas_area = atlas_width * atlas_width;
 
-	i32 curx = 0;
-	i32 cury = 0;
-	i32 cur_shelf_size = 0;
-	for(i32 i = 0; i < builder->sprites_len; i++) {
-    	SpriteTextureList* list = &builder->texture_lists[pack_order[i]];
-    	SpriteData* sprite      = builder->sprites[pack_order[i]];
-    	sprite->size = iv2_new(list->textures[0]->width, list->textures[0]->height);
+    i32 curx = 0;
+    i32 cury = 0;
+    i32 cur_shelf_size = 0;
+    for(i32 i = 0; i < builder->sprites_len; i++) {
+        SpriteTextureList* list = &builder->texture_lists[pack_order[i]];
+        SpriteData* sprite      = builder->sprites[pack_order[i]];
+        sprite->size = iv2_new(list->textures[0]->width, list->textures[0]->height);
 
-    	for(i32 j = 0; j < sprite->frames_len; j++) {
-    		TextureData* tex   = builder->texture_lists[pack_order[i]].textures[j];
+        for(i32 j = 0; j < sprite->frames_len; j++) {
+            TextureData* tex   = builder->texture_lists[pack_order[i]].textures[j];
             SpriteFrame* frame = &sprite->frames[j];
 
-    		if(cur_shelf_size == 0) {
-    			cur_shelf_size = tex->height;
-    		}
+            if(cur_shelf_size == 0) {
+                cur_shelf_size = tex->height;
+            }
 
-    		if(curx + tex->width > atlas_width) {
-    			if(cur_shelf_size == 0) {
-    				goto try_pack_again;
-    			}
+            if(curx + tex->width > atlas_width) {
+                if(cur_shelf_size == 0) {
+                    goto try_pack_again;
+                }
 
-    			cury += cur_shelf_size;
-    			cur_shelf_size = tex->height;
-    			curx = 0;
-    		}
+                cury += cur_shelf_size;
+                cur_shelf_size = tex->height;
+                curx = 0;
+            }
 
-    		frame->atlas_position.x = curx;
-    		frame->atlas_position.y = cury;
-    		curx += tex->height;
+            frame->atlas_position.x = curx;
+            frame->atlas_position.y = cury;
+            curx += tex->height;
 
-    		if(cury + cur_shelf_size >= atlas_width) {
-    			goto try_pack_again;
-    		}
-    	}
-	}
+            if(cury + cur_shelf_size >= atlas_width) {
+                goto try_pack_again;
+            }
+        }
+    }
 
     // Packing size was successful, now render rects to atlas texture.
-	TextureData* atlas = (TextureData*)stack_alloc(
-	    stack, texture_size_from_dimensions(atlas_width, atlas_width, builder->format));
-	atlas->width  = atlas_width;
-	atlas->height = atlas_width;
-	atlas->format = builder->format;
+    TextureData* atlas = (TextureData*)stack_alloc(
+        stack, texture_size_from_dimensions(atlas_width, atlas_width, builder->format));
+    atlas->width  = atlas_width;
+    atlas->height = atlas_width;
+    atlas->format = builder->format;
     u8 pixel_bytes = texture_format_bytes_per_pixel(builder->format);
-	memset(atlas->pixel_buffer, 0, atlas_width * atlas_width * pixel_bytes);
+    memset(atlas->pixel_buffer, 0, atlas_width * atlas_width * pixel_bytes);
 
-	for(i32 i = 0; i < builder->sprites_len; i++) {
-    	printf("sprites %d!\n", i);
-    	SpriteTextureList* list = &builder->texture_lists[i];
-    	SpriteData* sprite      = builder->sprites[i];
-    	for(i32 j = 0; j < sprite->frames_len; j++) {
-        	printf("frame %d\n", j);
-    		TextureData* tex   = list->textures[j];
+    for(i32 i = 0; i < builder->sprites_len; i++) {
+        printf("sprites %d!\n", i);
+        SpriteTextureList* list = &builder->texture_lists[i];
+        SpriteData* sprite      = builder->sprites[i];
+        for(i32 j = 0; j < sprite->frames_len; j++) {
+            printf("frame %d\n", j);
+            TextureData* tex   = list->textures[j];
             SpriteFrame* frame = &sprite->frames[j];
-    		for(i32 y = 0; y < tex->height; y++) {
-    			for(i32 x = 0; x < tex->width; x++) {
-    				i32 dst_x = frame->atlas_position.x + x;
-    				i32 dst_y = frame->atlas_position.y + y;
-    				u8* src_pixel = &tex->pixel_buffer[(y * tex->width + x) * pixel_bytes];
-    				u8* dst_pixel = &atlas->pixel_buffer[(dst_y * atlas_width + dst_x) * pixel_bytes];
-    				memcpy(dst_pixel, src_pixel, pixel_bytes);
-    				if(*src_pixel == 0) {
-        				printf("  ");
-    				} else {
-            			printf("%2d", *src_pixel);
-    				}
-    				//dst_pixel[0] = src_pixel[0];
-    				//dst_pixel[1] = src_pixel[1];
-    				//dst_pixel[2] = src_pixel[2];
-    				//dst_pixel[3] = src_pixel[3];
-    			}
-    			printf("\n");
-    		}
-    	}
-	}
+            for(i32 y = 0; y < tex->height; y++) {
+                for(i32 x = 0; x < tex->width; x++) {
+                    i32 dst_x = frame->atlas_position.x + x;
+                    i32 dst_y = frame->atlas_position.y + y;
+                    u8* src_pixel = &tex->pixel_buffer[(y * tex->width + x) * pixel_bytes];
+                    u8* dst_pixel = &atlas->pixel_buffer[(dst_y * atlas_width + dst_x) * pixel_bytes];
+                    memcpy(dst_pixel, src_pixel, pixel_bytes);
+                    if(*src_pixel == 0) {
+                        printf("  ");
+                    } else {
+                        printf("%2d", *src_pixel);
+                    }
+                    //dst_pixel[0] = src_pixel[0];
+                    //dst_pixel[1] = src_pixel[1];
+                    //dst_pixel[2] = src_pixel[2];
+                    //dst_pixel[3] = src_pixel[3];
+                }
+                printf("\n");
+            }
+        }
+    }
 
     // NOW: is this only for atlas case with the one texture from duckies?
     //u64 texture_handle = asset_builder_next_handle_of_type(pack_builder, string_const("TEXTURE"));

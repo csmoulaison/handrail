@@ -14,15 +14,15 @@
 #define assert(assertion) do { if(!(assertion)) { printf("Assertion failed at %s:%u\n", __FILE__, __LINE__); print_callstack(); exit(1); } } while(0)
 
 #if DEBUG_ASSERTIONS
-	#define debug_assert(assertion) assert(assertion)
+    #define debug_assert(assertion) assert(assertion)
 #else
-	#define debug_assert
+    #define debug_assert
 #endif
 
 #if DEBUG_STRICT_ASSERTIONS
-	#define strict_assert(assertion) assert(assertion)
+    #define strict_assert(assertion) assert(assertion)
 #else
-	#define strict_assert
+    #define strict_assert
 #endif
 
 #ifdef CSM_IMPLEMENTATION

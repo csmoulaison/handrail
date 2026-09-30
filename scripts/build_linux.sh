@@ -1,10 +1,10 @@
-$EXE=$1
+EXE=$1
 TARGET=$2
-$DEBUG_OR_RELEASE=$3
+DEBUG_OR_RELEASE=$3
 
 # Common arguments to static and dynamic builds
 FLAGS="-std=c99 -Wall -Werror -Wno-unused "
-INCLUDE="-I code/ -I extern/ "
+INCLUDE="-I handrail/code/ -I code/ -I handrail/extern/ "
 #SRC="build/asset/pack.o "
 
 case $DEBUG_OR_RELEASE in
@@ -12,7 +12,7 @@ case $DEBUG_OR_RELEASE in
         FLAGS+="-g -rdynamic "
         ;;
     "release")
-        FLAGS+="-02 "
+        FLAGS+="-O2 "
         ;;
 esac
 
@@ -48,7 +48,7 @@ prebuild() {
 
 bootstrap() {
     start_step "Bootstrap"
-	gcc code/build.c -o build/build -g -rdynamic -Wall -Werror -Wno-unused -lm
+    gcc code/prebuild.c -o build/build $INCLUDE -g -rdynamic -Wall -Werror -Wno-unused -lm
     end_step
 }
 
@@ -60,7 +60,7 @@ static() {
     end_step
 
     start_step "Static (build)"
-    gcc code/csm_core/main.c extern/GL/gl3w.c build/asset/pack.o \
+    gcc handrail/code/main.c handrail/extern/GL/gl3w.c build/asset/pack.o \
         -o bin/$EXE \
         $INCLUDE \
         $FLAGS \
@@ -105,7 +105,7 @@ case "$TARGET" in
     "clean")
         rm -rf bin/*
         rm -rf build/*
-		exit 0
+        exit 0
         ;;
 esac
 

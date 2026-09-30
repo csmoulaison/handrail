@@ -102,7 +102,7 @@ void synth_callback(Synth* synth, f32* samples, i32 samples_len, i32 sample_rate
     }
     
     for(i32 i = 0; i < samples_len; i++) {
-		samples[i] = 0.0f;
+        samples[i] = 0.0f;
         for(i32 j = 0; j < SYNTH_WAVE_COUNT; j++) {
             wave = &synth->wave_channels[j];
             if(wave->freq > 10.0f) {
@@ -126,16 +126,16 @@ void synth_callback(Synth* synth, f32* samples, i32 samples_len, i32 sample_rate
         for(i32 j = 0; j < SYNTH_NOISE_COUNT; j++) {
             noise = &synth->noise_channels[j];
             if(noise->phase_timer < 0) {
-    			noise->phase_timer = SYNTH_NOISE_PHASE_COOLDOWN;
-    			noise->phase_amp = random_f32_signed() * noise->amp;
+                noise->phase_timer = SYNTH_NOISE_PHASE_COOLDOWN;
+                noise->phase_amp = random_f32_signed() * noise->amp;
             }
             noise->phase_timer--;
-			samples[i] += noise->phase_amp;
+            samples[i] += noise->phase_amp;
         }
-		samples[i] *= synth->attenuation;
-		// RELEASE: remove this assert
-		assert(samples[i] > -synth->shelf && samples[i] < synth->shelf);
-		samples[i] = f32_clamp(samples[i], -synth->shelf, synth->shelf);
+        samples[i] *= synth->attenuation;
+        // RELEASE: remove this assert
+        assert(samples[i] > -synth->shelf && samples[i] < synth->shelf);
+        samples[i] = f32_clamp(samples[i], -synth->shelf, synth->shelf);
     }
 }
 

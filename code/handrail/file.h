@@ -55,7 +55,7 @@ File file_open(String fname, FileOpenMode mode) {
 
 bool file_try_open(String fname, FileOpenMode mode, File* out) {
     FILE* handle;
-	char* buf = alloca(fname.len + 1);
+    char* buf = alloca(fname.len + 1);
     String fname_cstring = string_init(buf, fname.len+1);
     string_cat(&fname_cstring, fname);
     string_write_null_terminator(&fname_cstring);
@@ -101,7 +101,7 @@ u64 file_last_modified(File* file) {
 
 u64 file_path_last_modified(String path) {
 #if PLATFORM == PLATFORM_LINUX
-	char* buf = alloca(path.len + 1);
+    char* buf = alloca(path.len + 1);
     String cpath = string_init(buf, path.len + 1);
     string_cat(&cpath, path);
     string_write_null_terminator(&cpath);
@@ -109,17 +109,17 @@ u64 file_path_last_modified(String path) {
     stat(cpath.text, &file_stat);
     return file_stat.st_mtim.tv_sec;
 #elif PLATFORM == PLATFORM_WINDOWS
-	// NOW: Windows implementation
-	return 0;
+    // NOW: Windows implementation
+    return 0;
 #elif PLATFORM == PLATFORM_WEB
-	// TODO: Web implementation
+    // TODO: Web implementation
 #endif
 }
 
-// NOTO: reduntant two functions below.
+// TODO: reduntant two functions below.
 String* file_names_in_directory(String path, i32* out_path_count, Stack* stack) {
 #if PLATFORM == PLATFORM_LINUX
-	char* buf = alloca(path.len + 1);
+    char* buf = alloca(path.len + 1);
     String cpath = string_init(buf, path.len+1);
     string_cat(&cpath, path);
     string_write_null_terminator(&cpath);
@@ -148,16 +148,16 @@ String* file_names_in_directory(String path, i32* out_path_count, Stack* stack) 
     closedir(dir);
     return paths;
 #elif PLATFORM == PLATFORM_WINDOWS
-	return NULL;
-	// NOW: Windows implementation
+    return NULL;
+    // NOW: Windows implementation
 #elif PLATFORM == PLATFORM_WEB
-	// TODO: Web implementation
+    // TODO: Web implementation
 #endif
 }
 
 String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack) {
 #if PLATFORM == PLATFORM_LINUX
-	char* buf = alloca(path.len + 1);
+    char* buf = alloca(path.len + 1);
     String cpath = string_init(buf, path.len+1);
     string_cat(&cpath, path);
     string_write_null_terminator(&cpath);
@@ -187,10 +187,10 @@ String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack) 
     closedir(dir);
     return paths;
 #elif PLATFORM == PLATFORM_WINDOWS
-	// NOW: Windows implementation
-	return NULL;
+    // NOW: Windows implementation
+    return NULL;
 #elif PLATFORM == PLATFORM_WEB
-	// TODO: Web implementation
+    // TODO: Web implementation
 #endif
 }
 
@@ -257,7 +257,7 @@ u64 file_read_string_token(File* file, String* dst, char delimiter) {
     return len;
 }
 
-// NOTO: factor int/float conversions into string_to_* functions.
+// TODO: factor int/float conversions into string_to_* functions.
 i64 file_read_int_token(File* file, char delimiter) {
     String tmp = string_init((char[256]){}, 256);
     file_read_string_token(file, &tmp, delimiter);

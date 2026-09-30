@@ -73,7 +73,7 @@ typedef struct {
 } TextureBmpV3Info;
 #pragma pack(pop)
 
-// NOTO: choose channels when loading
+// TODO: choose channels when loading
 TextureData* texture_from_bmp(File* file, Stack* stack);
 // Creates an 8 bit texture
 TextureData* texture_from_bmp_4_bit_palletized(File* file, Stack* stack);

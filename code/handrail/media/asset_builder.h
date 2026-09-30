@@ -89,7 +89,7 @@ void asset_builder_output_pack(AssetBuilder* builder, String path) {
     file_write(&file, builder->stack->memory, builder->stack->head);
     file_close(&file);
 #if PLATFORM == PLATFORM_WINDOWS
-	// NOW: Create assets.rc file
+    // NOW: Create assets.rc file
 #endif
 }
 
@@ -122,7 +122,7 @@ void asset_builder_output_source(AssetBuilder* builder, String handles_path, Str
     // Asset index arrays
     for(i32 i = 0; i < builder->types_len; i++) {
         AssetType* type = &builder->types[i];
-		char* buf = (char*)alloca(type->type_name.len);
+        char* buf = (char*)alloca(type->type_name.len);
         String lowercase_type = string_init(buf, type->type_name.len);
         string_cat(&lowercase_type, type->type_name);
         string_to_lower(&lowercase_type);
