@@ -46,6 +46,8 @@ static inline f32  f32_move_to_zero(f32 value, f32 amount);
 static inline f32  f32_lerp(f32 a, f32 b, f32 t);
 static inline f32  f32_smoothstep(f32 n);
 static inline f32  f32_smootherstep(f32 n);
+// Smallest power of 2 greater than or equal to value.
+static inline u32  u32_round_up_to_power_of_2(u32 value);
 static inline i32  true_mod(i32 a, i32 b);
 // IVector2
 static inline iv2  iv2_new(i32 x, i32 y);
@@ -160,6 +162,18 @@ static inline f32 f32_smoothstep(f32 n) {
 
 static inline f32 f32_smootherstep(f32 n) {
     return n * n / (2.0 * n * n - 2.0 * n + 1.0);
+}
+
+static inline u32 u32_round_up_to_power_of_2(u32 value) {
+    if(value <= 1) return 1;
+    assert(value <= (1u << 31));
+#if defined(_MSC_VER)
+    unsigned long index;
+    _BitScanReverse(&index, value - 1);
+    return 1u << (index + 1);
+#else
+    return 1u << (32 - __builtin_clz(value - 1));
+#endif
 }
 
 static inline i32 true_mod(i32 a, i32 b) {

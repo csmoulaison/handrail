@@ -209,7 +209,7 @@ GlTexture gl_create_texture(
         format = GL_RGBA;
         internal_format = GL_RGBA8;
     } else {
-        printf("csm_gl: bytes per pixel %u in texture data not supported.\n", bytes_per_pixel);
+        printf("handrail_gl: bytes per pixel %u in texture data not supported.\n", bytes_per_pixel);
         panic();
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_param);

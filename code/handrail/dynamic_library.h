@@ -34,35 +34,39 @@ bool dynamic_library_update(DynamicLibrary* lib) {
 #if PLATFORM == PLATFORM_LINUX
             dlclose(lib->handle);
 #elif PLATFORM == PLATFORM_WINDOWS
-            // NOW: Implement windows
+            FreeLibrary((HMODULE)lib->handle);
 #elif PLATFORM == PLATFORM_WEB
             // TODO: Implement web
 #endif
         }
         lib->last_modified = actual_last_modified;
 
-        // Copy filename to earlier version
-        // tmp filename format is: library_name0000.so, where 0000 is the current
-        // time displayed as an integer.
+        // Copy the library to a timestamped name and load that, so the build
+        // can overwrite the original while it is loaded. The copy is named
+        // library_name0000.ext, where 0000 is the current time as an integer.
         time_t cur_time;
         time(&cur_time);
         char time_buf[64] = {};
         String time_str = string_init(time_buf, 64);
         string_print_int(&time_str, cur_time);
 
-        char* copy_buf = (char*)alloca(lib->path.len + 64 + 1);
-        String copy_cstr = string_init(&copy_buf, lib->path.len + 64 + 1);
+        u64 extension_start = lib->path.len;
+        for(u64 i = 0; i < lib->path.len; i++) {
+            if(lib->path.text[i] == '.') extension_start = i;
+        }
+        char* copy_buf = (char*)alloca(lib->path.len + 64 + 3);
+        String copy_cstr = string_init(copy_buf, lib->path.len + 64 + 3);
         string_cat(&copy_cstr, string_const("./"));
-        string_cat(&copy_cstr, lib->path);
-        string_replace_substring(&copy_cstr, string_const(".so"), time_str);
-        string_cat(&copy_cstr, string_const(".so"));
+        string_cat(&copy_cstr, (String){ .text = lib->path.text, .len = extension_start, .capacity = extension_start });
+        string_cat(&copy_cstr, time_str);
+        string_cat(&copy_cstr, (String){ .text = lib->path.text + extension_start, .len = lib->path.len - extension_start, .capacity = lib->path.len - extension_start });
         string_write_null_terminator(&copy_cstr);
 
+#if PLATFORM == PLATFORM_LINUX
         char cmd[512];
         sprintf(cmd, "cp %s %s", path_cstr.text, copy_cstr.text);
         system(cmd);
 
-#if PLATFORM == PLATFORM_LINUX
         lib->handle = dlopen(copy_cstr.text, RTLD_NOW);
         char* err;
         if((err = dlerror()) != NULL) {
@@ -71,7 +75,14 @@ bool dynamic_library_update(DynamicLibrary* lib) {
         assert(lib->handle != NULL);
         return true;
 #elif PLATFORM == PLATFORM_WINDOWS
-        // NOW: Implement windows
+        if(!CopyFileA(path_cstr.text, copy_cstr.text, FALSE)) {
+            log_exit("Couldn't copy %s to %s (error %lu)", path_cstr.text, copy_cstr.text, GetLastError());
+        }
+        lib->handle = LoadLibraryA(copy_cstr.text);
+        if(lib->handle == NULL) {
+            log_exit("Couldn't load %s (error %lu)", copy_cstr.text, GetLastError());
+        }
+        return true;
 #elif PLATFORM == PLATFORM_WEB
         // TODO: Implement web
 #endif
@@ -94,8 +105,11 @@ void* dynamic_library_load_function(DynamicLibrary lib, String name) {
     }
     return ptr;
 #elif PLATFORM == PLATFORM_WINDOWS
-    // NOW: Implement windows
-    return NULL;
+    void* ptr = (void*)GetProcAddress((HMODULE)lib.handle, cstr.text);
+    if(ptr == NULL) {
+        log_exit("Couldn't load function %s (error %lu)", cstr.text, GetLastError());
+    }
+    return ptr;
 #elif PLATFORM == PLATFORM_WEB
     // TODO: Implement web
 #endif

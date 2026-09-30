@@ -1,8 +1,8 @@
 // config.h is provided by the specific game
 #include "config.h"
 
-#define CSM_IMPLEMENTATION
-#define CSM_INCLUDE_VK
+#define HANDRAIL_IMPLEMENTATION
+#define HANDRAIL_INCLUDE_VK
 #define BUFFER_DEBUG true
 #include "handrail/core.h"
 
@@ -22,62 +22,415 @@
 
 #define ROOT_MEMORY_SIZE (sizeof(Context) + GAME_STACK_SIZE + RENDER_STACK_SIZE + PLATFORM_FRAME_STACK_SIZE)
 
-// Audio settings
-#ifndef AUDIO_SAMPLE_RATE
-#define AUDIO_SAMPLE_RATE 44100
+// Audio settings. The format itself (AUDIO_SAMPLE_RATE, AUDIO_CHANNEL_COUNT) is
+// in game.h, since the game writes it.
+#define AUDIO_BYTES_PER_FRAME (sizeof(f32) * AUDIO_CHANNEL_COUNT)
+// How far ahead of playback the main loop keeps the game's audio
+#ifndef AUDIO_LATENCY_FRAMES
+#define AUDIO_LATENCY_FRAMES (AUDIO_SAMPLE_RATE / 12)
 #endif
+
+// The game library and the functions loaded from it
+typedef struct {
+    DynamicLibrary      library;
+    GameInitFunction*   init;
+    GameUpdateFunction* update;
+    GameAudioCallback*  audio_callback;
+} GameLibrary;
+
+void game_library_update(GameLibrary* game) {
+    if(dynamic_library_update(&game->library)) {
+        log_print(LOG_HOT_RELOAD, "Loaded game library " STRING_FMT, STRING_ARG(game->library.path));
+        game->init           = dynamic_library_load_function(game->library, string_const("game_init"));
+        game->update         = dynamic_library_load_function(game->library, string_const("game_update"));
+        game->audio_callback = dynamic_library_load_function(game->library, string_const("game_audio_callback"));
+    }
+}
 
 // WINDOWS
 #if PLATFORM == PLATFORM_WINDOWS
 
-typedef struct {
-    i32 tmp;
-} Context;
+#define COBJMACROS
+#include <objbase.h>
+#include <avrt.h>
+#include <audioclient.h>
+#include <mmdeviceapi.h>
 
-LRESULT CALLBACK window_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch(uMsg) {
-        default: break;
-    }
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+// Defined here rather than linked from uuid.lib, so their names can't collide with the SDK's
+static const GUID WASAPI_CLSID_MM_DEVICE_ENUMERATOR = { 0xbcde0395, 0xe52f, 0x467c, { 0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e } };
+static const GUID WASAPI_IID_MM_DEVICE_ENUMERATOR   = { 0xa95664d2, 0x9614, 0x4f35, { 0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6 } };
+static const GUID WASAPI_IID_AUDIO_CLIENT           = { 0x1cb9ad4c, 0xdbfa, 0x4c32, { 0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2 } };
+static const GUID WASAPI_IID_AUDIO_CLIENT3          = { 0x7ed4ee07, 0x8e67, 0x4cd4, { 0x8c, 0x1a, 0x2b, 0x7a, 0x59, 0x87, 0xad, 0x42 } };
+static const GUID WASAPI_IID_AUDIO_RENDER_CLIENT    = { 0xf294acfc, 0x3146, 0x4483, { 0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2 } };
+static const GUID WASAPI_SUBTYPE_IEEE_FLOAT         = { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
+#define HR_VERIFY(statement) { \
+    HRESULT hr_result = (statement); \
+    if(FAILED(hr_result)) { \
+        char hr_message[512] = {}; \
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, hr_result, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), hr_message, sizeof(hr_message), NULL); \
+        log_exit("HRESULT 0x%08lx: %s: %s", (unsigned long)hr_result, #statement, hr_message); \
+    } \
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, int nCmdShow) {
-    // Create window
-    // NOW: define window_proc
-    WNDCLASS window_class = {};
+// The main thread writes game audio into a ring buffer and the audio thread
+// copies it out to WASAPI. The ring is mapped twice back to back in virtual
+// memory, so a read or write of up to ring_size bytes starting at any offset is
+// contiguous. The offsets count bytes written and read since startup and wrap
+// around; only their difference and their value masked by ring_size - 1 matter.
+// Each offset has one writer, so no lock is needed.
+typedef struct {
+    IAudioClient* client;
+    HANDLE        event;
+    HANDLE        thread;
+    volatile LONG stop;
+    u8*           ring;
+    u32           ring_size;
+    volatile LONG read_offset;
+    volatile LONG write_offset;
+} Wasapi;
+
+typedef struct {
+    bool        close_requested;
+    Log         log;
+    HWND        hwnd;
+    Platform    platform;
+    GameLibrary game;
+    Wasapi      audio;
+} Context;
+
+PlatformKey platform_key_from_win32_virtual_key(WPARAM virtual_key) {
+    switch(virtual_key) {
+        case 'W': {
+            return PLATFORM_KEY_W;
+        } break;
+        case 'A': {
+            return PLATFORM_KEY_A;
+        } break;
+        case 'S': {
+            return PLATFORM_KEY_S;
+        } break;
+        case 'D': {
+            return PLATFORM_KEY_D;
+        } break;
+        case 'Q': {
+            return PLATFORM_KEY_Q;
+        } break;
+        case 'E': {
+            return PLATFORM_KEY_E;
+        } break;
+        case 'G': {
+            return PLATFORM_KEY_G;
+        } break;
+        case 'M': {
+            return PLATFORM_KEY_M;
+        } break;
+        case 'R': {
+            return PLATFORM_KEY_R;
+        } break;
+        case VK_UP: {
+            return PLATFORM_KEY_UP;
+        } break;
+        case VK_LEFT: {
+            return PLATFORM_KEY_LEFT;
+        } break;
+        case VK_DOWN: {
+            return PLATFORM_KEY_DOWN;
+        } break;
+        case VK_RIGHT: {
+            return PLATFORM_KEY_RIGHT;
+        } break;
+        case VK_ESCAPE: {
+            return PLATFORM_KEY_ESCAPE;
+        } break;
+        case VK_TAB: {
+            return PLATFORM_KEY_TAB;
+        } break;
+        case VK_SPACE: {
+            return PLATFORM_KEY_SPACE;
+        } break;
+        case VK_RETURN: {
+            return PLATFORM_KEY_ENTER;
+        } break;
+        default: return PLATFORM_KEY_NONE;
+    }
+    return PLATFORM_KEY_NONE;
+}
+
+LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    // The context is passed to CreateWindowEx and kept in the window's user data.
+    // Messages that arrive before WM_CREATE have no context.
+    Context* context = NULL;
+    if(message == WM_CREATE) {
+        CREATESTRUCTA* create = (CREATESTRUCTA*)lparam;
+        context = (Context*)create->lpCreateParams;
+        SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)context);
+    } else {
+        context = (Context*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+    }
+    if(context == NULL) {
+        return DefWindowProcA(hwnd, message, wparam, lparam);
+    }
+
+    switch(message) {
+        case WM_CLOSE: {
+            context->close_requested = true;
+            return 0;
+        } break;
+        case WM_SIZE: {
+            iv2 window_size = iv2_new(LOWORD(lparam), HIWORD(lparam));
+            if(!iv2_eq(window_size, context->platform.window_size)) {
+                context->platform.window_size = window_size;
+                context->platform.window_size_updated_this_frame = true;
+            }
+            return 0;
+        } break;
+        case WM_KEYDOWN: {
+            // Bit 30 is set if the key was already down, i.e. this is an auto-repeat
+            if((lparam & (1 << 30)) == 0) {
+                PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYDOWN, .key = key });
+            }
+            return 0;
+        } break;
+        case WM_KEYUP: {
+            PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+            platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYUP, .key = key });
+            return 0;
+        } break;
+        default: break;
+    }
+    return DefWindowProcA(hwnd, message, wparam, lparam);
+}
+
+// Owns the WASAPI stream after initialization. Every time WASAPI asks for more
+// audio, copy what the main thread has queued in the ring, padding with silence
+// if it has fallen behind (for instance while the window is being dragged,
+// which blocks the main loop). Doesn't log, since the log isn't thread safe.
+DWORD WINAPI wasapi_audio_thread(LPVOID arg) {
+    Wasapi* audio = (Wasapi*)arg;
+
+    // Ask the scheduler for audio priority. Failing that, run at normal priority.
+    DWORD task_index = 0;
+    HANDLE task = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
+
+    IAudioRenderClient* playback = NULL;
+    HR_VERIFY(IAudioClient_GetService(audio->client, &WASAPI_IID_AUDIO_RENDER_CLIENT, (void**)&playback));
+    UINT32 buffer_frames = 0;
+    HR_VERIFY(IAudioClient_GetBufferSize(audio->client, &buffer_frames));
+    HR_VERIFY(IAudioClient_Start(audio->client));
+
+    u32 ring_mask = audio->ring_size - 1;
+    while(WaitForSingleObject(audio->event, INFINITE) == WAIT_OBJECT_0) {
+        if(ReadAcquire(&audio->stop)) {
+            break;
+        }
+
+        UINT32 padding_frames = 0;
+        HR_VERIFY(IAudioClient_GetCurrentPadding(audio->client, &padding_frames));
+        u32 free_frames = buffer_frames - padding_frames;
+        if(free_frames == 0) {
+            continue;
+        }
+        BYTE* output = NULL;
+        HR_VERIFY(IAudioRenderClient_GetBuffer(playback, free_frames, &output));
+
+        // Copy what's queued, and silence for the rest
+        u32 read_offset = (u32)audio->read_offset;
+        u32 write_offset = (u32)ReadAcquire(&audio->write_offset);
+        u32 queued_frames = (write_offset - read_offset) / AUDIO_BYTES_PER_FRAME;
+        u32 copy_frames = min(queued_frames, free_frames);
+        memcpy(output, audio->ring + (read_offset & ring_mask), copy_frames * AUDIO_BYTES_PER_FRAME);
+        memset(output + copy_frames * AUDIO_BYTES_PER_FRAME, 0, (free_frames - copy_frames) * AUDIO_BYTES_PER_FRAME);
+        HR_VERIFY(IAudioRenderClient_ReleaseBuffer(playback, free_frames, 0));
+        InterlockedAdd(&audio->read_offset, (LONG)(copy_frames * AUDIO_BYTES_PER_FRAME));
+    }
+
+    HR_VERIFY(IAudioClient_Stop(audio->client));
+    IAudioRenderClient_Release(playback);
+    if(task != NULL) {
+        AvRevertMmThreadCharacteristics(task);
+    }
+    return 0;
+}
+
+i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line, i32 show_cmd) {
+    // Allocate memory
+    void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    assert(mem != NULL);
+    Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
+    Context* context = (Context*)stack_alloc_zero(&root_stack, sizeof(Context));
+    Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
+    Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
+    Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
+
+    // Open a console for stdout and stderr, which a /SUBSYSTEM:WINDOWS program doesn't get
+    assert(AllocConsole());
+    FILE* console_file;
+    freopen_s(&console_file, "CONOUT$", "w", stdout);
+    freopen_s(&console_file, "CONOUT$", "w", stderr);
+    freopen_s(&console_file, "CONIN$",  "r", stdin);
+
+    // Initialize logging
+    log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
+    log_bind(&context->log);
+    context->platform.log = &context->log;
+
+    // Create window, sized so its client area is the requested size
+    WNDCLASSA window_class = {};
     window_class.lpfnWndProc   = window_proc;
-    window_class.hInstance     = hInstance;
+    window_class.hInstance     = hinstance;
+    window_class.hCursor       = LoadCursor(NULL, IDC_ARROW);
     window_class.lpszClassName = GAME_NAME;
-    RegisterClass(&window_class);
+    assert(RegisterClassA(&window_class));
 
-    HWND hwnd = CreateWindowEx(
-        0, GAME_NAME, GAME_NAME,
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-        NULL, NULL, hInstance, NULL);
-    if(hwnd == NULL) {
-        return 0;
-    }
-
-    ShowWindow(hwnd, nCmdShow);
-
-    // Initialize renderer
-    // NOW: Allocate from a root stack and run the game loop, as on Linux.
-    void* mem = malloc(RENDER_STACK_SIZE);
-    Stack render_stack = stack_from_memory(mem, RENDER_STACK_SIZE, string_const("Renderer"));
-    VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
-    Stack scratch_stack = stack_from_stack(&render_stack, MEGABYTE, string_const("RendererScratch"));
+    RECT window_rect = { 0, 0, 1280, 720 };
+    AdjustWindowRect(&window_rect, WS_OVERLAPPEDWINDOW, FALSE);
+    context->hwnd = CreateWindowExA(
+        0, GAME_NAME, GAME_NAME, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT, window_rect.right - window_rect.left, window_rect.bottom - window_rect.top,
+        NULL, NULL, hinstance, context);
+    assert(context->hwnd != NULL);
     RECT client_rect;
-    GetClientRect(hwnd, &client_rect);
-    VkPlatformWindow vk_window = { .hwnd = hwnd, .hinstance = hInstance };
-    vk_init(vk, string_const(GAME_NAME), vk_window, iv2_new(client_rect.right, client_rect.bottom), &scratch_stack);
+    GetClientRect(context->hwnd, &client_rect);
+    context->platform.window_size = iv2_new(client_rect.right, client_rect.bottom);
+    context->platform.window_size_updated_this_frame = false;
 
-    // Main loop
-    MSG msg = {};
-    while(GetMessage(&msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    // Initialize WASAPI audio on the default playback device
+    Wasapi* audio = &context->audio;
+    HR_VERIFY(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED));
+    IMMDeviceEnumerator* enumerator = NULL;
+    HR_VERIFY(CoCreateInstance(&WASAPI_CLSID_MM_DEVICE_ENUMERATOR, NULL, CLSCTX_ALL, &WASAPI_IID_MM_DEVICE_ENUMERATOR, (void**)&enumerator));
+    IMMDevice* device = NULL;
+    HR_VERIFY(IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device));
+    IMMDeviceEnumerator_Release(enumerator);
+    HR_VERIFY(IMMDevice_Activate(device, &WASAPI_IID_AUDIO_CLIENT, CLSCTX_ALL, NULL, (void**)&audio->client));
+    IMMDevice_Release(device);
+
+    WAVEFORMATEXTENSIBLE format = {};
+    format.Format.wFormatTag           = WAVE_FORMAT_EXTENSIBLE;
+    format.Format.nChannels            = (WORD)AUDIO_CHANNEL_COUNT;
+    format.Format.nSamplesPerSec       = (DWORD)AUDIO_SAMPLE_RATE;
+    format.Format.nAvgBytesPerSec      = (DWORD)(AUDIO_SAMPLE_RATE * AUDIO_BYTES_PER_FRAME);
+    format.Format.nBlockAlign          = (WORD)AUDIO_BYTES_PER_FRAME;
+    format.Format.wBitsPerSample       = (WORD)(sizeof(f32) * 8);
+    format.Format.cbSize               = sizeof(format) - sizeof(format.Format);
+    format.Samples.wValidBitsPerSample = (WORD)(sizeof(f32) * 8);
+    format.dwChannelMask               = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    format.SubFormat                   = WASAPI_SUBTYPE_IEEE_FLOAT;
+
+    // Prefer IAudioClient3's low latency shared mode, which is only available
+    // if the device's mix format matches ours. Otherwise fall back to a default
+    // period and let WASAPI convert.
+    bool client_initialized = false;
+    IAudioClient3* client3 = NULL;
+    if(SUCCEEDED(IAudioClient_QueryInterface(audio->client, &WASAPI_IID_AUDIO_CLIENT3, (void**)&client3))) {
+        UINT32 period_default = 0;
+        UINT32 period_fundamental = 0;
+        UINT32 period_min = 0;
+        UINT32 period_max = 0;
+        if(SUCCEEDED(IAudioClient3_GetSharedModeEnginePeriod(client3, (WAVEFORMATEX*)&format, &period_default, &period_fundamental, &period_min, &period_max))
+        && SUCCEEDED(IAudioClient3_InitializeSharedAudioStream(client3, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, period_min, (WAVEFORMATEX*)&format, NULL))) {
+            client_initialized = true;
+            log_print(LOG_AUDIO, "WASAPI low latency period: %u frames", period_min);
+        }
+        IAudioClient3_Release(client3);
     }
-    
+    if(!client_initialized) {
+        REFERENCE_TIME period = 0;
+        HR_VERIFY(IAudioClient_GetDevicePeriod(audio->client, &period, NULL));
+        DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        HR_VERIFY(IAudioClient_Initialize(audio->client, AUDCLNT_SHAREMODE_SHARED, flags, period, 0, (WAVEFORMATEX*)&format, NULL));
+        log_print(LOG_AUDIO, "WASAPI default period: %lld ns", (long long)period * 100);
+    }
+    audio->event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    assert(audio->event != NULL);
+    HR_VERIFY(IAudioClient_SetEventHandle(audio->client, audio->event));
+
+    // Map the ring buffer twice back to back: reserve a placeholder for both
+    // halves, split it, and map one section into each half.
+    audio->ring_size = u32_round_up_to_power_of_2(max(64 * 1024, AUDIO_SAMPLE_RATE * AUDIO_BYTES_PER_FRAME));
+    assert(AUDIO_LATENCY_FRAMES * AUDIO_BYTES_PER_FRAME < audio->ring_size);
+    u8* placeholder_1 = (u8*)VirtualAlloc2(NULL, NULL, 2 * audio->ring_size, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0);
+    assert(placeholder_1 != NULL);
+    u8* placeholder_2 = placeholder_1 + audio->ring_size;
+    assert(VirtualFree(placeholder_1, audio->ring_size, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER));
+    HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, audio->ring_size, NULL);
+    assert(section != NULL);
+    void* view_1 = MapViewOfFile3(section, NULL, placeholder_1, 0, audio->ring_size, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
+    void* view_2 = MapViewOfFile3(section, NULL, placeholder_2, 0, audio->ring_size, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, NULL, 0);
+    assert(view_1 != NULL && view_2 != NULL);
+    // The views keep the section alive
+    CloseHandle(section);
+    audio->ring = (u8*)view_1;
+    audio->read_offset = 0;
+    audio->write_offset = 0;
+    audio->stop = 0;
+    audio->thread = CreateThread(NULL, 0, wasapi_audio_thread, audio, 0, NULL);
+    assert(audio->thread != NULL);
+
+    // Initialize renderer and game
+    VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
+    Stack render_scratch_stack = stack_from_stack(&render_stack, MEGABYTE, string_const("RendererScratch"));
+    VkPlatformWindow vk_window = { .hwnd = context->hwnd, .hinstance = hinstance };
+    vk_init(vk, string_const(GAME_NAME), vk_window, context->platform.window_size, &render_scratch_stack);
+
+    dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
+    game_library_update(&context->game);
+    RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
+    context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
+    vk_load_assets(vk, render_setup);
+
+    // Loop
+    while(context->close_requested == false) {
+        // Pump Win32 messages, which window_proc turns into platform state and events
+        MSG message;
+        while(PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageA(&message);
+        }
+        if(context->close_requested) {
+            break;
+        }
+
+        // A minimized window has no area to render to, so only keep audio going
+        bool minimized = context->platform.window_size.x == 0 || context->platform.window_size.y == 0;
+
+        // Update game, which writes the frame straight into GPU memory
+        RenderFrame render_frame;
+        if(!minimized) {
+            vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+            context->game.update(game_stack.memory, &render_frame, &context->platform);
+        }
+
+        // Top the audio ring up to the target latency. The game writes straight into it.
+        u32 write_offset = (u32)audio->write_offset;
+        u32 read_offset = (u32)ReadAcquire(&audio->read_offset);
+        i32 frames_len = AUDIO_LATENCY_FRAMES - (i32)((write_offset - read_offset) / AUDIO_BYTES_PER_FRAME);
+        if(frames_len > 0) {
+            f32* samples = (f32*)(audio->ring + (write_offset & (audio->ring_size - 1)));
+            context->game.audio_callback(game_stack.memory, samples, frames_len);
+            InterlockedAdd(&audio->write_offset, (LONG)(frames_len * AUDIO_BYTES_PER_FRAME));
+        }
+
+        // Render
+        if(!minimized) {
+            vk_frame_end(vk, &render_frame);
+        } else {
+            Sleep(10);
+        }
+
+        // Prepare for next frame
+        stack_clear(&platform_frame_stack);
+        game_library_update(&context->game);
+        context->platform.window_size_updated_this_frame = false;
+        context->platform.events_len = 0;
+    }
+
+    // Stop the audio thread before the process tears down the memory it uses
+    InterlockedExchange(&audio->stop, 1);
+    SetEvent(audio->event);
+    WaitForSingleObject(audio->thread, INFINITE);
     return 0;
 }
 
@@ -107,23 +460,10 @@ typedef struct {
     Display*            display;
     Window              window;
     snd_pcm_t*          alsa_pcm;
-    u32                 alsa_latency_samples;
     Platform            platform;
 
-    DynamicLibrary      game;
-    GameInitFunction*   game_init;
-    GameUpdateFunction* game_update;
-    GameAudioCallback*  game_audio_callback;
+    GameLibrary         game;
 } Context;
-
-void update_game_library(Context* context) {
-    if(dynamic_library_update(&context->game)) {
-        log_print(LOG_HOT_RELOAD, "Loaded game library " STRING_FMT, STRING_ARG(context->game.path));
-        context->game_init           = dynamic_library_load_function(context->game, string_const("game_init"));
-        context->game_update         = dynamic_library_load_function(context->game, string_const("game_update"));
-        context->game_audio_callback = dynamic_library_load_function(context->game, string_const("game_audio_callback"));
-    }
-}
 
 PlatformKey platform_key_from_xlib_keysym(u32 keysym) {
     switch(keysym) {
@@ -227,14 +567,16 @@ i32 main(i32 argc, char** argv) {
     ALSA_VERIFY(snd_pcm_open(&context->alsa_pcm, "default", SND_PCM_STREAM_PLAYBACK, 0));
     snd_pcm_hw_params_alloca(&hw_params);
     ALSA_VERIFY(snd_pcm_hw_params_any(context->alsa_pcm, hw_params));
-    ALSA_VERIFY(snd_pcm_hw_params_set_access(context->alsa_pcm, hw_params, SND_PCM_ACCESS_RW_NONINTERLEAVED));
+    ALSA_VERIFY(snd_pcm_hw_params_set_access(context->alsa_pcm, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED));
     //ALSA_VERIFY(snd_pcm_hw_params_set_format(context->alsa_pcm, hw_params, SND_PCM_FORMAT_S16_LE));
     ALSA_VERIFY(snd_pcm_hw_params_set_format(context->alsa_pcm, hw_params, SND_PCM_FORMAT_FLOAT_LE));
     ALSA_VERIFY(snd_pcm_hw_params_set_rate_near(context->alsa_pcm, hw_params, &sample_rate, 0));
-    ALSA_VERIFY(snd_pcm_hw_params_set_channels(context->alsa_pcm, hw_params, 1));
+    ALSA_VERIFY(snd_pcm_hw_params_set_channels(context->alsa_pcm, hw_params, AUDIO_CHANNEL_COUNT));
     ALSA_VERIFY(snd_pcm_hw_params(context->alsa_pcm, hw_params));
     ALSA_VERIFY(snd_pcm_prepare(context->alsa_pcm));
-    context->alsa_latency_samples = sample_rate / 12;
+    if(sample_rate != AUDIO_SAMPLE_RATE) {
+        log_print(LOG_WARN, "ALSA is playing at %u Hz rather than %u Hz", sample_rate, AUDIO_SAMPLE_RATE);
+    }
 
     // Initialize renderer and game
     VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
@@ -242,10 +584,10 @@ i32 main(i32 argc, char** argv) {
     VkPlatformWindow vk_window = { .display = context->display, .window = context->window };
     vk_init(vk, string_const(GAME_NAME), vk_window, context->platform.window_size, &render_scratch_stack);
 
-    dynamic_library_init(&context->game, string_const(GAME_LIB_NAME));
-    update_game_library(context);
+    dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
+    game_library_update(&context->game);
     RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
-    context->game_init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
+    context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
     vk_load_assets(vk, render_setup);
 
     // Loop
@@ -304,19 +646,19 @@ i32 main(i32 argc, char** argv) {
         // Update game, which writes the frame straight into GPU memory
         RenderFrame render_frame;
         vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
-        context->game_update(game_stack.memory, &render_frame, &context->platform);
+        context->game.update(game_stack.memory, &render_frame, &context->platform);
 
         // Update ALSA sound
         snd_pcm_sframes_t available;
         snd_pcm_sframes_t delay;
         ALSA_VERIFY(snd_pcm_avail_delay(context->alsa_pcm, &available, &delay));
         // TODO: Make sure we have enough frames available.
-        i32 sample_count = context->alsa_latency_samples - delay;
-        if(sample_count > 0) {
-            f32* sample_buffer = (f32*)stack_alloc(&platform_frame_stack, sample_count * sizeof(f32));
-            context->game_audio_callback(game_stack.memory, sample_buffer, sample_count);
-            i32 frames_written = snd_pcm_writen(context->alsa_pcm, (void**)&sample_buffer, sample_count);
-            assert(frames_written == sample_count);
+        i32 frames_len = AUDIO_LATENCY_FRAMES - delay;
+        if(frames_len > 0) {
+            f32* samples = (f32*)stack_alloc(&platform_frame_stack, frames_len * AUDIO_BYTES_PER_FRAME);
+            context->game.audio_callback(game_stack.memory, samples, frames_len);
+            i32 frames_written = snd_pcm_writei(context->alsa_pcm, samples, frames_len);
+            assert(frames_written == frames_len);
         }
 
         // Render
@@ -324,7 +666,7 @@ i32 main(i32 argc, char** argv) {
 
         // Prepare for next frame
         stack_clear(&platform_frame_stack);
-        update_game_library(context);
+        game_library_update(&context->game);
         context->platform.window_size_updated_this_frame = false;
         context->platform.events_len = 0;
     }

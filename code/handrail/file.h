@@ -20,14 +20,14 @@ u64 file_path_last_modified(String path);
 String* file_names_in_directory(String path, i32* out_path_count, Stack* stack);
 String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack);
 
-void file_write(File* file, void* data, u64 len);
+void file_write(File* file, void* data, u64 size);
 void file_write_char(File* file, char c);
 void file_write_string(File* file, String string);
 void file_print_uint(File* file, u64 n);
 void file_print_int(File* file, i64 n);
 void file_print_float(File* file, f64 n);
 
-u64  file_read(File* file, void* dst, u64 len);
+u64  file_read(File* file, void* dst, u64 size);
 u64  file_read_all(File* file, void* dst, u64 dst_size);
 char file_read_char(File* file);
 // dst can be NULL in these string related functions.
@@ -62,15 +62,16 @@ bool file_try_open(String fname, FileOpenMode mode, File* out) {
     String fname_cstring = string_init(buf, fname.len+1);
     string_cat(&fname_cstring, fname);
     string_write_null_terminator(&fname_cstring);
+    // Always binary: text mode on Windows rewrites newlines and stops reading at 0x1A
     switch(mode) {
         case FILE_OPEN_READ: {
-            handle = fopen(fname_cstring.text, "r");
+            handle = fopen(fname_cstring.text, "rb");
         } break;
         case FILE_OPEN_WRITE: {
-            handle = fopen(fname_cstring.text, "w");
+            handle = fopen(fname_cstring.text, "wb");
         } break;
         case FILE_OPEN_READ_WRITE: {
-            handle = fopen(fname_cstring.text, "rw");
+            handle = fopen(fname_cstring.text, "r+b");
         } break;
         default: {
             fprintf(stderr, "File open mode %i not valid.", mode);
@@ -112,8 +113,15 @@ u64 file_path_last_modified(String path) {
     stat(cpath.text, &file_stat);
     return file_stat.st_mtim.tv_sec;
 #elif PLATFORM == PLATFORM_WINDOWS
-    // NOW: Windows implementation
-    return 0;
+    char* buf = alloca(path.len + 1);
+    String cpath = string_init(buf, path.len + 1);
+    string_cat(&cpath, path);
+    string_write_null_terminator(&cpath);
+    WIN32_FILE_ATTRIBUTE_DATA attributes;
+    if(!GetFileAttributesExA(cpath.text, GetFileExInfoStandard, &attributes)) {
+        return 0;
+    }
+    return ((u64)attributes.ftLastWriteTime.dwHighDateTime << 32) | (u64)attributes.ftLastWriteTime.dwLowDateTime;
 #elif PLATFORM == PLATFORM_WEB
     // TODO: Web implementation
 #endif
@@ -151,8 +159,36 @@ String* file_names_in_directory(String path, i32* out_path_count, Stack* stack) 
     closedir(dir);
     return paths;
 #elif PLATFORM == PLATFORM_WINDOWS
-    return NULL;
-    // NOW: Windows implementation
+    char* buf = alloca(path.len + 3);
+    String pattern = string_init(buf, path.len + 3);
+    string_cat(&pattern, path);
+    string_cat(&pattern, string_const("/*"));
+    string_write_null_terminator(&pattern);
+
+    WIN32_FIND_DATAA find_data;
+    HANDLE find = FindFirstFileA(pattern.text, &find_data);
+    assert(find != INVALID_HANDLE_VALUE);
+    *out_path_count = 0;
+    do {
+        if(strcmp(find_data.cFileName, ".") != 0 && strcmp(find_data.cFileName, "..") != 0) {
+            *out_path_count += 1;
+        }
+    } while(FindNextFileA(find, &find_data));
+    FindClose(find);
+
+    String* paths = (String*)stack_alloc(stack, *out_path_count * sizeof(String));
+    *out_path_count = 0;
+    find = FindFirstFileA(pattern.text, &find_data);
+    assert(find != INVALID_HANDLE_VALUE);
+    do {
+        if(strcmp(find_data.cFileName, ".") != 0 && strcmp(find_data.cFileName, "..") != 0) {
+            paths[*out_path_count] = string_from_stack(stack, strlen(find_data.cFileName));
+            string_cat(&paths[*out_path_count], string_const(find_data.cFileName));
+            *out_path_count += 1;
+        }
+    } while(FindNextFileA(find, &find_data));
+    FindClose(find);
+    return paths;
 #elif PLATFORM == PLATFORM_WEB
     // TODO: Web implementation
 #endif
@@ -190,15 +226,44 @@ String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack) 
     closedir(dir);
     return paths;
 #elif PLATFORM == PLATFORM_WINDOWS
-    // NOW: Windows implementation
-    return NULL;
+    char* buf = alloca(path.len + 3);
+    String pattern = string_init(buf, path.len + 3);
+    string_cat(&pattern, path);
+    string_cat(&pattern, string_const("/*"));
+    string_write_null_terminator(&pattern);
+
+    WIN32_FIND_DATAA find_data;
+    HANDLE find = FindFirstFileA(pattern.text, &find_data);
+    assert(find != INVALID_HANDLE_VALUE);
+    *out_path_count = 0;
+    do {
+        if(strcmp(find_data.cFileName, ".") != 0 && strcmp(find_data.cFileName, "..") != 0) {
+            *out_path_count += 1;
+        }
+    } while(FindNextFileA(find, &find_data));
+    FindClose(find);
+
+    String* paths = (String*)stack_alloc(stack, *out_path_count * sizeof(String));
+    *out_path_count = 0;
+    find = FindFirstFileA(pattern.text, &find_data);
+    assert(find != INVALID_HANDLE_VALUE);
+    do {
+        if(strcmp(find_data.cFileName, ".") != 0 && strcmp(find_data.cFileName, "..") != 0) {
+            paths[*out_path_count] = string_from_stack(stack, path.len + strlen(find_data.cFileName));
+            string_cat(&paths[*out_path_count], path);
+            string_cat(&paths[*out_path_count], string_const(find_data.cFileName));
+            *out_path_count += 1;
+        }
+    } while(FindNextFileA(find, &find_data));
+    FindClose(find);
+    return paths;
 #elif PLATFORM == PLATFORM_WEB
     // TODO: Web implementation
 #endif
 }
 
-void file_write(File* file, void* data, u64 len) {
-    fwrite(data, len, 1, file->handle);
+void file_write(File* file, void* data, u64 size) {
+    fwrite(data, size, 1, file->handle);
 }
 
 void file_write_char(File* file, char c) {
@@ -221,8 +286,8 @@ void file_print_float(File* file, f64 n) {
     fprintf(file->handle, "%lf", n);
 }
 
-u64 file_read(File* file, void* dst, u64 len) {
-    return fread(dst, len, 1, file->handle);
+u64 file_read(File* file, void* dst, u64 size) {
+    return fread(dst, size, 1, file->handle);
 }
 
 u64 file_read_all(File* file, void* dst, u64 dst_size) {

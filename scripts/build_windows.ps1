@@ -60,20 +60,24 @@ function Static {
         /Fe:bin\game.exe /Fo:build\ /Fd:bin\ `
         $INCLUDE `
         $FLAGS `
-        /D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.so\"' `
+        /D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.dll\"' `
         /nologo `
-        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib
+        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib avrt.lib onecore.lib
     End-Step
 }
 
 function Dynamic {
+    # A unique PDB name per build, so a debugger holding the last one open
+    # doesn't block rebuilding the library for hot reload
+    $PDB_NAME = "game_$(Get-Date -Format 'yyyyMMddHHmmssfff').pdb"
+
     Start-Step "Game library (final)"
     cl code\game.c `
         /Fo:build\ `
         /nologo `
         $INCLUDE `
         $FLAGS /LD /link /EXPORT:game_init /EXPORT:game_update /EXPORT:game_audio_callback `
-        /OUT:bin\game_tmp.dll /IMPLIB:build\game.lib
+        /OUT:bin\game_tmp.dll /IMPLIB:build\game.lib /PDB:bin\$PDB_NAME
     End-Step
 
     Move-Item -Path bin\game_tmp.dll -Destination bin\game.dll -Force

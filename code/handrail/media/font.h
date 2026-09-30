@@ -20,7 +20,7 @@ typedef struct {
 v4  font_glyph_src(FontData* font, FontGlyph* glyph);
 u64 font_size();
 
-#ifdef CSM_FONT_PROCESSING
+#ifdef HANDRAIL_FONT_PROCESSING
 #include <ft2build.h>
 #include FT_FREETYPE_H
 typedef struct {
@@ -54,7 +54,7 @@ u64 font_size() {
     return sizeof(FontData);
 }
 
-#ifdef CSM_FONT_PROCESSING
+#ifdef HANDRAIL_FONT_PROCESSING
 FontAndTextureData font_and_texture_from_ttf(char* path, u32 point_size, u32 texture_handle, Stack* stack) {
     FT_Library ft;
     if(FT_Init_FreeType(&ft)) { 

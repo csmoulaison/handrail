@@ -72,7 +72,7 @@ typedef struct Stack  Stack;
 #include "handrail/log.h"
 #include "handrail/math.h"
 
-#ifdef CSM_INCLUDE_GL
+#ifdef HANDRAIL_INCLUDE_GL
 #include "handrail/gpu/gl.h"
 #endif
 
@@ -90,15 +90,16 @@ typedef struct Stack  Stack;
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
 #include "handrail/media/shader.h"
+#include "handrail/media/pcm.h"
 
 #include "handrail/render.h"
 #include "handrail/game.h"
 
-#ifdef CSM_INCLUDE_VK
+#ifdef HANDRAIL_INCLUDE_VK
 #include "handrail/gpu/vk.h"
 #endif
 
-#ifdef CSM_IMPLEMENTATION
+#ifdef HANDRAIL_IMPLEMENTATION
 #define HANDRAIL_IMPLEMENTATION_PASS
 #include "handrail/assert.h"
 #include "handrail/string.h"
@@ -109,7 +110,7 @@ typedef struct Stack  Stack;
 #include "handrail/log.h"
 #include "handrail/math.h"
 
-#ifdef CSM_INCLUDE_GL
+#ifdef HANDRAIL_INCLUDE_GL
 #include "handrail/gpu/gl.h"
 #endif
 
@@ -127,11 +128,12 @@ typedef struct Stack  Stack;
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
 #include "handrail/media/shader.h"
+#include "handrail/media/pcm.h"
 
 #include "handrail/render.h"
 #include "handrail/game.h"
 
-#ifdef CSM_INCLUDE_VK
+#ifdef HANDRAIL_INCLUDE_VK
 #include "handrail/gpu/vk.h"
 #endif
 #endif
