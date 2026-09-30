@@ -60,12 +60,12 @@ static() {
     end_step
 
     start_step "Static (build)"
-    gcc handrail/code/main.c handrail/extern/GL/gl3w.c build/asset/pack.o \
+    gcc handrail/code/main.c build/asset/pack.o \
         -o bin/$EXE \
         $INCLUDE \
         $FLAGS \
         -DGAME_NAME="\"$EXE\"" -DGAME_LIB_NAME="\"$EXE.so\"" \
-        -lasound -lX11 -lX11-xcb -lGL -lm -lxcb -lXfixes
+        -lasound -lX11 -lm -ldl
     end_step
 }
 

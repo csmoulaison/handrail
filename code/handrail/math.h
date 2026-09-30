@@ -419,6 +419,10 @@ void m4_lookat(v3 origin, v3 target, v3 up, f32* res) {
     res[12] = -v3_dot(s, origin);
     res[13] = -v3_dot(u, origin);
     res[14] = v3_dot(f, origin);
+    res[3]  = 0.0f;
+    res[7]  = 0.0f;
+    res[11] = 0.0f;
+    res[15] = 1.0f;
 }
 
 void m4_mul(f32* a, f32* b, f32* res) {

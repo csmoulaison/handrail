@@ -17,12 +17,24 @@ typedef struct {
     };
 } TexturePixel32;
 
+// In-memory texture, as produced by the loaders below.
 typedef struct {
     u64           width;
     u64           height;
     TextureFormat format;
     u8            pixel_buffer[];
 } TextureData;
+
+// Pushed TEXTURE asset. The pixels live in the TEXTURE_PIXELS region, which
+// the renderer copies into images; only this header stays CPU-side. format is
+// TEXTURE_FORMAT_RGBA or TEXTURE_FORMAT_R (one byte per pixel; palettized
+// textures keep their indices).
+typedef struct {
+    u32 width;
+    u32 height;
+    u32 format;
+    u32 pixels_offset;
+} TextureAsset;
 
 #pragma pack(push, 1)
 typedef struct {
@@ -81,6 +93,8 @@ u64 texture_size_from_dimensions(u64 width, u64 height, u8 format);
 u64 texture_size(TextureData* texture);
 u8 texture_format_bits_per_pixel(TextureFormat format);
 u8 texture_format_bytes_per_pixel(TextureFormat format);
+// Push a TEXTURE header plus its pixels, converted to a GPU format. Returns the TEXTURE handle.
+u64 texture_push_asset(AssetBuilder* builder, String tag, TextureData* texture, Stack* stack);
 
 #endif
 
@@ -169,6 +183,51 @@ u8 texture_format_bits_per_pixel(TextureFormat format) {
 u8 texture_format_bytes_per_pixel(TextureFormat format) {
     u8 pixel_bits = texture_format_bits_per_pixel(format);
     return (pixel_bits + 8 - 1) / 8;
+}
+
+u64 texture_push_asset(AssetBuilder* builder, String tag, TextureData* texture, Stack* stack) {
+    TextureAsset asset = {};
+    asset.width  = (u32)texture->width;
+    asset.height = (u32)texture->height;
+    u64 pixels_len = texture->width * texture->height;
+    u8* pixels = texture->pixel_buffer;
+    u64 pixels_size = 0;
+
+    // Convert to a format every GPU can sample
+    switch(texture->format) {
+        case TEXTURE_FORMAT_RGBA: {
+            asset.format = TEXTURE_FORMAT_RGBA;
+            pixels_size = pixels_len * 4;
+        } break;
+        case TEXTURE_FORMAT_RGB: {
+            asset.format = TEXTURE_FORMAT_RGBA;
+            pixels_size = pixels_len * 4;
+            pixels = (u8*)stack_alloc(stack, pixels_size);
+            for(u64 i = 0; i < pixels_len; i++) {
+                pixels[i * 4 + 0] = texture->pixel_buffer[i * 3 + 0];
+                pixels[i * 4 + 1] = texture->pixel_buffer[i * 3 + 1];
+                pixels[i * 4 + 2] = texture->pixel_buffer[i * 3 + 2];
+                pixels[i * 4 + 3] = 0xFF;
+            }
+        } break;
+        case TEXTURE_FORMAT_R:
+        case TEXTURE_FORMAT_8_BIT_PALLETIZED: {
+            asset.format = TEXTURE_FORMAT_R;
+            pixels_size = pixels_len;
+        } break;
+        default: {
+            fprintf(stderr, "texture_push_asset: unsupported texture format %u\n", texture->format);
+            panic();
+        }
+    }
+
+    u64 pixels_offset = 0;
+    asset_builder_push_asset(builder, tag, string_const("TEXTURE_PIXELS"), string_const("u8"), pixels, pixels_size, &pixels_offset);
+    asset.pixels_offset = (u32)pixels_offset;
+
+    u64 handle = asset_builder_next_handle_of_type(builder, string_const("TEXTURE"));
+    asset_builder_push_asset(builder, tag, string_const("TEXTURE"), string_const("TextureAsset"), &asset, sizeof(TextureAsset), NULL);
+    return handle;
 }
 
 #endif

@@ -76,10 +76,10 @@ typedef struct Stack  Stack;
 #include "handrail/gpu/gl.h"
 #endif
 
+#include "handrail/coff.h"
 #include "handrail/platform.h"
 #include "handrail/fiedler.h"
 #include "handrail/dynamic_library.h"
-#include "handrail/game.h"
 
 #include "handrail/media/asset_builder.h"
 #include "handrail/media/mesh.h"
@@ -89,6 +89,14 @@ typedef struct Stack  Stack;
 #include "handrail/media/blender.h"
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
+#include "handrail/media/shader.h"
+
+#include "handrail/render.h"
+#include "handrail/game.h"
+
+#ifdef CSM_INCLUDE_VK
+#include "handrail/gpu/vk.h"
+#endif
 
 #ifdef CSM_IMPLEMENTATION
 #define HANDRAIL_IMPLEMENTATION_PASS
@@ -105,10 +113,10 @@ typedef struct Stack  Stack;
 #include "handrail/gpu/gl.h"
 #endif
 
+#include "handrail/coff.h"
 #include "handrail/platform.h"
 #include "handrail/fiedler.h"
 #include "handrail/dynamic_library.h"
-#include "handrail/game.h"
 
 #include "handrail/media/asset_builder.h"
 #include "handrail/media/mesh.h"
@@ -118,6 +126,14 @@ typedef struct Stack  Stack;
 #include "handrail/media/blender.h"
 #include "handrail/media/synth.h"
 #include "handrail/media/font.h"
+#include "handrail/media/shader.h"
+
+#include "handrail/render.h"
+#include "handrail/game.h"
+
+#ifdef CSM_INCLUDE_VK
+#include "handrail/gpu/vk.h"
+#endif
 #endif
 
 #endif

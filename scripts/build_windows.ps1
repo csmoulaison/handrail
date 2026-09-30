@@ -4,7 +4,7 @@ $DEBUG_OR_RELEASE = $args[2]
 
 # Common arguments to static and dynamic builds
 $FLAGS   = "/std:c11", "/W1", "/WX", "/Zi"
-$INCLUDE = "/Ihandrail\code\", "/Icode\", "/Ihandrail\extern\"
+$INCLUDE = "/Ihandrail\code\", "/Icode\", "/Ihandrail\extern\", "/I$env:VULKAN_SDK\Include"
 
 switch($DEBUG_OR_RELEASE) {
     "debug" { $FLAGS += ""; break }
@@ -55,19 +55,14 @@ function Bootstrap {
 function Static {
     prebuild
 
-    Start-Step "Static (asset resource)"
-    #NOW: generate or link or something asset pack
-    End-Step
-
     Start-Step "Static (build)"
-    # NOW: add asset pack
-    cl handrail\code\main.c handrail\extern\GL\gl3w.c `
+    cl handrail\code\main.c build\asset\pack.obj `
         /Fe:bin\game.exe /Fo:build\ /Fd:bin\ `
         $INCLUDE `
         $FLAGS `
         /D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.so\"' `
         /nologo `
-        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib opengl32.lib
+        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib
     End-Step
 }
 

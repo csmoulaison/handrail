@@ -2,31 +2,25 @@
 #include "config.h"
 
 #define CSM_IMPLEMENTATION
-#define CSM_INCLUDE_GL
+#define CSM_INCLUDE_VK
 #define BUFFER_DEBUG true
 #include "handrail/core.h"
 
 #include "generated/asset_data.c"
-#include "generated/asset_handles.c"
 
-// render.c is provided by the specific game
-#include "render.c"
-
-// Memory sizes
+// Memory sizes. Render frame memory is not here: it is GPU-visible memory
+// owned by the Vulkan backend.
 #ifndef GAME_STACK_SIZE
 #define GAME_STACK_SIZE (MEGABYTE * 4)
 #endif
 #ifndef RENDER_STACK_SIZE
 #define RENDER_STACK_SIZE (MEGABYTE * 4)
 #endif
-#ifndef RENDER_FRAME_STACK_SIZE
-#define RENDER_FRAME_STACK_SIZE (MEGABYTE * 4)
-#endif
 #ifndef PLATFORM_FRAME_STACK_SIZE
 #define PLATFORM_FRAME_STACK_SIZE (MEGABYTE * 4)
 #endif
 
-#define ROOT_MEMORY_SIZE (sizeof(Context) + GAME_STACK_SIZE + RENDER_STACK_SIZE + RENDER_FRAME_STACK_SIZE + PLATFORM_FRAME_STACK_SIZE)
+#define ROOT_MEMORY_SIZE (sizeof(Context) + GAME_STACK_SIZE + RENDER_STACK_SIZE + PLATFORM_FRAME_STACK_SIZE)
 
 // Audio settings
 #ifndef AUDIO_SAMPLE_RATE
@@ -66,6 +60,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
 
     ShowWindow(hwnd, nCmdShow);
 
+    // Initialize renderer
+    // NOW: Allocate from a root stack and run the game loop, as on Linux.
+    void* mem = malloc(RENDER_STACK_SIZE);
+    Stack render_stack = stack_from_memory(mem, RENDER_STACK_SIZE, string_const("Renderer"));
+    VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
+    Stack scratch_stack = stack_from_stack(&render_stack, MEGABYTE, string_const("RendererScratch"));
+    RECT client_rect;
+    GetClientRect(hwnd, &client_rect);
+    VkPlatformWindow vk_window = { .hwnd = hwnd, .hinstance = hInstance };
+    vk_init(vk, string_const(GAME_NAME), vk_window, iv2_new(client_rect.right, client_rect.bottom), &scratch_stack);
+
     // Main loop
     MSG msg = {};
     while(GetMessage(&msg, NULL, 0, 0) > 0) {
@@ -81,8 +86,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine,
 // LINUX
 #if PLATFORM == PLATFORM_LINUX
 
-#include <GL/glx.h>
-typedef GLXContext(*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/keysym.h>
 
 #include <alsa/asoundlib.h>
 #include <alloca.h>
@@ -185,7 +191,6 @@ i32 main(i32 argc, char** argv) {
     memset(context, 0, sizeof(Context));
     Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
     Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
-    Stack render_frame_stack   = stack_from_stack(&root_stack, RENDER_FRAME_STACK_SIZE, string_const("RenderFrame"));
     Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
 
     // Initialize logging
@@ -193,109 +198,28 @@ i32 main(i32 argc, char** argv) {
     log_bind(&context->log);
     context->platform.log = &context->log;
 
-    // Init Xlib/GLX window
+    // Init Xlib window
     context->display = XOpenDisplay("");
     assert(context->display != NULL);
 
-    // Will factor out GLX stuff for other API integrations.
-    i32 glx_version_major;
-    i32 glx_version_minor;
-    assert(glXQueryVersion(context->display, &glx_version_major, &glx_version_minor) != 0 && !(glx_version_major == 1 && glx_version_minor < 3) && glx_version_major >= 1);
-
-    // Find the best framebuffer configuration from those available. Our only
-    // quantitative criteria at the moment is sample count.
-    i32 desired_framebuffer_attributes[] = {
-        GLX_X_RENDERABLE, True,
-        GLX_DRAWABLE_TYPE, GLX_WINDOW_BIT,
-        GLX_RENDER_TYPE, GLX_RGBA_BIT,
-        GLX_X_VISUAL_TYPE, GLX_TRUE_COLOR,
-        GLX_RED_SIZE, 8,
-        GLX_GREEN_SIZE, 8,
-        GLX_BLUE_SIZE, 8,
-        GLX_ALPHA_SIZE, 8,
-        GLX_DEPTH_SIZE, 24,
-        GLX_STENCIL_SIZE, 8,
-        GLX_DOUBLEBUFFER, True,
-        GLX_SAMPLE_BUFFERS, 1,
-        GLX_SAMPLES, 4,
-        None
-    };
-    i32 framebuffer_configs_len;
-    GLXFBConfig* framebuffer_configs = glXChooseFBConfig(context->display, DefaultScreen(context->display), desired_framebuffer_attributes, &framebuffer_configs_len);
-    assert(framebuffer_configs != NULL);
-    i32 best_framebuffer_config = -1;
-    i32 best_sample_count = -1;
-    for(i32 fc = 0; fc < framebuffer_configs_len; fc++) {
-        XVisualInfo* tmp_visual_info = glXGetVisualFromFBConfig(context->display, framebuffer_configs[fc]);
-        if(tmp_visual_info != NULL) {
-            i32 sample_buffers;
-            glXGetFBConfigAttrib(context->display, framebuffer_configs[fc], GLX_SAMPLE_BUFFERS, &sample_buffers);
-            i32 samples;
-            glXGetFBConfigAttrib(context->display, framebuffer_configs[fc], GLX_SAMPLES, &samples);
-            if(best_framebuffer_config == -1 || (sample_buffers && samples > best_sample_count)) {
-                best_framebuffer_config = fc;
-                best_sample_count = samples;
-            }
-        }
-        XFree(tmp_visual_info);
-    }
-    GLXFBConfig glx_framebuffer_config = framebuffer_configs[best_framebuffer_config];
-    XVisualInfo* glx_visual_info = glXGetVisualFromFBConfig(context->display, glx_framebuffer_config);
-    XFree(framebuffer_configs);
-
-    // Set up root context-> This is somewhat mixed up with GLX stuff still, though
-    // it should survive the generic case with some things factored into variables.
-    Window root_window = RootWindow(context->display, glx_visual_info->screen);
+    i32 screen = DefaultScreen(context->display);
+    Window root_window = RootWindow(context->display, screen);
     XSetWindowAttributes set_window_attributes = {};
-    set_window_attributes.colormap = XCreateColormap(context->display, root_window, glx_visual_info->visual, AllocNone);
     set_window_attributes.background_pixmap = None;
     set_window_attributes.border_pixel = 0;
     set_window_attributes.event_mask = StructureNotifyMask | ExposureMask | KeyPressMask | KeyReleaseMask | PointerMotionMask | ButtonPressMask | ButtonReleaseMask;
 
-    // Create our actual Xlib context->
-    u32 window_width = 1;
-    u32 window_height = 1;
-    context->window = XCreateWindow(context->display, root_window, 0, 0, window_width, window_height, 0, glx_visual_info->depth, InputOutput, glx_visual_info->visual, CWBorderPixel | CWColormap | CWEventMask, &set_window_attributes);
+    u32 window_width = 1280;
+    u32 window_height = 720;
+    context->window = XCreateWindow(context->display, root_window, 0, 0, window_width, window_height, 0, DefaultDepth(context->display, screen), InputOutput, DefaultVisual(context->display, screen), CWBorderPixel | CWEventMask, &set_window_attributes);
     if(context->window == 0) { panic(); }
-    XFree(glx_visual_info);
     XStoreName(context->display, context->window, GAME_NAME);
     XMapWindow(context->display, context->window);
+    context->platform.window_size = iv2_new(window_width, window_height);
 
-    // Validate existence of required GL extensions
-    glXCreateContextAttribsARBProc glXCreateContextAttribsARB;
-    char* gl_extensions = (char*)glXQueryExtensionsString(context->display, DefaultScreen(context->display));
-    glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
-    const char* extension = "GLX_ARB_create_context";
-    char* start;
-    char* where;
-    char* terminator;
-    // Extension names shouldn't have spaces
-    where = strchr((char*)extension, ' ');
-    assert(!where && *extension != '\0');
-    bool found_extension = true;
-    for (start = gl_extensions;;) {
-        where = strstr(start, extension);
-        if (!where)
-            break;
-
-        terminator = where + strlen(extension);
-        if (where == start || *(where - 1) == ' ') {
-            if (*terminator == ' ' || *terminator == '\0')
-                found_extension = true;
-            start = terminator;
-        }
-    }
-    assert(found_extension == true);
-
-    // Create GLX context and window
-    i32 glx_attributes[] = {
-        GLX_CONTEXT_MAJOR_VERSION_ARB, 4,
-        GLX_CONTEXT_MINOR_VERSION_ARB, 6,
-        None
-    };
-    GLXContext glx = glXCreateContextAttribsARB(context->display, glx_framebuffer_config, 0, 1, glx_attributes);
-    if(glXIsDirect(context->display, glx) == false) { panic(); }
-    glXMakeCurrent(context->display, context->window, glx);
+    // Ask the window manager to tell us when the window is closed, rather than killing the connection
+    Atom wm_delete_window = XInternAtom(context->display, "WM_DELETE_WINDOW", False);
+    XSetWMProtocols(context->display, context->window, &wm_delete_window, 1);
 
     // Initialize ALSA audio
     u32 sample_rate = AUDIO_SAMPLE_RATE;
@@ -313,10 +237,16 @@ i32 main(i32 argc, char** argv) {
     context->alsa_latency_samples = sample_rate / 12;
 
     // Initialize renderer and game
-    render_init(render_stack.memory, asset_pack_data);
+    VkContext* vk = (VkContext*)stack_alloc_zero(&render_stack, sizeof(VkContext));
+    Stack render_scratch_stack = stack_from_stack(&render_stack, MEGABYTE, string_const("RendererScratch"));
+    VkPlatformWindow vk_window = { .display = context->display, .window = context->window };
+    vk_init(vk, string_const(GAME_NAME), vk_window, context->platform.window_size, &render_scratch_stack);
+
     dynamic_library_init(&context->game, string_const(GAME_LIB_NAME));
     update_game_library(context);
-    context->game_init(game_stack.memory, asset_pack_data, &context->platform);
+    RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
+    context->game_init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
+    vk_load_assets(vk, render_setup);
 
     // Loop
     while(context->close_requested == false) {
@@ -327,12 +257,20 @@ i32 main(i32 argc, char** argv) {
             switch(event.type) {
                 case Expose:
                     break;
+                case ClientMessage: {
+                    if((Atom)event.xclient.data.l[0] == wm_delete_window) {
+                        context->close_requested = true;
+                    }
+                } break;
                 case ConfigureNotify: {
+                    // ConfigureNotify also fires on moves, so only flag real size changes
                     XWindowAttributes window_attributes;
                     XGetWindowAttributes(context->display, context->window, &window_attributes);
-                    context->platform.window_size.x = window_attributes.width;
-                    context->platform.window_size.y = window_attributes.height;
-                    context->platform.window_size_updated_this_frame = true;
+                    iv2 window_size = iv2_new(window_attributes.width, window_attributes.height);
+                    if(!iv2_eq(window_size, context->platform.window_size)) {
+                        context->platform.window_size = window_size;
+                        context->platform.window_size_updated_this_frame = true;
+                    }
                 } break;
                 case KeyPress: {
                     u32 keysym = XLookupKeysym(&(event.xkey), 0);
@@ -363,8 +301,10 @@ i32 main(i32 argc, char** argv) {
             }
         }
 
-        // Update game
-        context->game_update(game_stack.memory, render_frame_stack.memory, &context->platform);
+        // Update game, which writes the frame straight into GPU memory
+        RenderFrame render_frame;
+        vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+        context->game_update(game_stack.memory, &render_frame, &context->platform);
 
         // Update ALSA sound
         snd_pcm_sframes_t available;
@@ -379,12 +319,10 @@ i32 main(i32 argc, char** argv) {
             assert(frames_written == sample_count);
         }
 
-        // Update renderer
-        render_update(render_stack.memory, render_frame_stack.memory, asset_pack_data, &context->platform);
-        glXSwapBuffers(context->display, context->window);
+        // Render
+        vk_frame_end(vk, &render_frame);
 
         // Prepare for next frame
-        stack_clear(&render_frame_stack);
         stack_clear(&platform_frame_stack);
         update_game_library(context);
         context->platform.window_size_updated_this_frame = false;

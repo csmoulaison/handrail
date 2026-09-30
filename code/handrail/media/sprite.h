@@ -190,13 +190,7 @@ try_pack_again:
         }
     }
 
-    // NOW: is this only for atlas case with the one texture from duckies?
-    //u64 texture_handle = asset_builder_next_handle_of_type(pack_builder, string_const("TEXTURE"));
-    u64 texture_handle = 0;
-    //assert(texture_handle == 0);
-    asset_builder_push_asset(pack_builder, 
-        string_const("SPRITE_ATLAS"), string_const("TEXTURE"), string_const("TextureData"),
-        atlas, texture_size(atlas));
+    u64 texture_handle = texture_push_asset(pack_builder, string_const("SPRITE_ATLAS"), atlas, stack);
 
     for(i32 i = 0; i < builder->sprites_len; i++) {
         SpriteData* sprite = builder->sprites[i];
@@ -204,7 +198,7 @@ try_pack_again:
 
         asset_builder_push_asset(pack_builder, 
             builder->sprite_tags[i], string_const("SPRITE"), string_const("SpriteData"),
-            sprite, sprite_size(sprite));
+            sprite, sprite_size(sprite), NULL);
     }
 }
 
@@ -238,14 +232,18 @@ void push_palettized_sprite_renderer_assets(
     palette->height = 1;
     palette->format = TEXTURE_FORMAT_RGBA;
     memcpy(palette->pixel_buffer, palette_pixels, 256 * sizeof(u32));
-    asset_builder_push_asset(asset_builder, 
-        string_const("PALETTE"), string_const("TEXTURE"), string_const("TextureData"),
-        palette, texture_size(palette));
+    texture_push_asset(asset_builder, string_const("PALETTE"), palette, stack);
 
-    Primitive2dData* primitive = primitive_2d_from_data(primitive_2d_quad_vertices, PRIMITIVE_2D_QUAD_VERTICES_LEN, stack);
-    asset_builder_push_asset(asset_builder, 
-        string_const("QUAD"), string_const("PRIMITIVE_2D"), string_const("Primitive2dData"),
-        primitive, primitive_2d_size(primitive));
+    u64 quad_vertices_offset = 0;
+    asset_builder_push_asset(asset_builder,
+        string_const("QUAD"), string_const("PRIMITIVE_2D_VERTICES"), string_const("v2"),
+        primitive_2d_quad_vertices, sizeof(primitive_2d_quad_vertices), &quad_vertices_offset);
+    Primitive2dAsset quad = {};
+    quad.vertices_len    = PRIMITIVE_2D_QUAD_VERTICES_LEN;
+    quad.vertices_offset = (u32)quad_vertices_offset;
+    asset_builder_push_asset(asset_builder,
+        string_const("QUAD"), string_const("PRIMITIVE_2D"), string_const("Primitive2dAsset"),
+        &quad, sizeof(Primitive2dAsset), NULL);
 }
 
 #endif

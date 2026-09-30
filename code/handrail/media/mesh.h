@@ -30,9 +30,24 @@ typedef struct {
     v2  vertices[];
 } Primitive2dData;
 
+// Pushed MESH asset. The vertices live in the MESH_VERTICES region, which the
+// renderer uploads whole; vertices_offset is in bytes from that region's start.
+typedef struct {
+    u32 vertices_len;
+    u32 vertices_offset;
+} MeshAsset;
+
+// Pushed PRIMITIVE_2D asset, laid out like MeshAsset over PRIMITIVE_2D_VERTICES (v2s).
+typedef struct {
+    u32 vertices_len;
+    u32 vertices_offset;
+} Primitive2dAsset;
+
 MeshData*        mesh_from_obj(File* file, Stack* stack);
 u64              mesh_size_from_vertices_len(u64 vertices_len);
 u64              mesh_size(MeshData* data);
+// Push a MESH header plus its vertices. Returns the MESH handle.
+u64              mesh_push_asset(AssetBuilder* builder, String tag, MeshData* mesh);
 
 Primitive2dData* primitive_2d_from_data(void* data, u64 vertices_len, Stack* stack);
 u64              primitive_2d_size_from_info(u64 vertices_len);
@@ -193,6 +208,19 @@ u64 mesh_size_from_vertices_len(u64 vertices_len) {
 
 u64 mesh_size(MeshData* mesh) {
     return mesh_size_from_vertices_len(mesh->vertices_len);
+}
+
+u64 mesh_push_asset(AssetBuilder* builder, String tag, MeshData* mesh) {
+    u64 vertices_offset = 0;
+    asset_builder_push_asset(builder, tag, string_const("MESH_VERTICES"), string_const("MeshVertexData"),
+        mesh->vertices, mesh->vertices_len * sizeof(MeshVertexData), &vertices_offset);
+
+    MeshAsset asset = {};
+    asset.vertices_len    = (u32)mesh->vertices_len;
+    asset.vertices_offset = (u32)vertices_offset;
+    u64 handle = asset_builder_next_handle_of_type(builder, string_const("MESH"));
+    asset_builder_push_asset(builder, tag, string_const("MESH"), string_const("MeshAsset"), &asset, sizeof(MeshAsset), NULL);
+    return handle;
 }
 
 Primitive2dData* primitive_2d_from_data(void* data, u64 vertices_len, Stack* stack) {
