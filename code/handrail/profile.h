@@ -11,8 +11,9 @@
 //     profile_end(PROFILE_GAME_PHYSICS);
 //
 // A timer can run several times per frame. Its time and call count add up over
-// the frame, and profile_frame_end moves the totals into last_ns, the history
-// ring, and the average and max over that ring. Different timers nest freely,
+// the frame, and profile_frame_end records the total time in a history ring and
+// the call count as last_calls. Averages, maxima, and graphs are computed from
+// the history when needed (profile_history_ns). Different timers nest freely,
 // but a timer can't be started while it is already running.
 //
 // PROFILE_MASK selects the enabled timers at build time. Calls on a disabled
@@ -40,7 +41,7 @@
 #define PROFILE_MASK 0
 #endif
 
-// Frames of per-timer history kept for averages, maxima, and graphs
+// Frames of per-timer history, which averages, maxima, and graphs are computed from
 #ifndef PROFILE_HISTORY_LEN
 #define PROFILE_HISTORY_LEN 512
 #endif
@@ -50,25 +51,19 @@
 #endif
 
 typedef struct {
-    bool running;
-    u64  start_ns;
+    u64 start_ns;    // Nonzero while running
     // This frame so far
-    u64  accum_ns;
-    u32  accum_calls;
-    // The last completed frame
-    u64  last_ns;
-    u32  last_calls;
-    // Over the history ring
-    u64  average_ns;
-    u64  max_ns;
-    u64  history_sum;
+    u64 accum_ns;
+    u32 accum_calls;
+    u32 last_calls;  // In the last completed frame
     // Per-frame totals. The oldest entry is at Profile.history_index.
-    u64  history[PROFILE_HISTORY_LEN];
-    char name[PROFILE_NAME_MAX];
+    u64 history[PROFILE_HISTORY_LEN];
 } ProfileTimer;
 
 typedef struct {
     ProfileTimer timers[PROFILE_TIMERS_LEN];
+    // Names set by the game. Engine timers are named by a static table.
+    char         game_names[PROFILE_TIMERS_LEN - PROFILE_ENGINE_TIMERS_LEN][PROFILE_NAME_MAX];
     // Slot the next completed frame is written to
     u32          history_index;
     u64          frame_count;
@@ -87,13 +82,16 @@ void          profile_init(Profile* profile);
 // Set the profile this module records to. Each module (executable, game
 // library) must bind separately. Timers in an unbound module do nothing.
 void          profile_bind(Profile* profile);
-// Name a timer in the bound profile. Names longer than PROFILE_NAME_MAX-1 are truncated.
+// Name a game timer in the bound profile. Names longer than PROFILE_NAME_MAX-1 are truncated.
 void          profile_set_name(u64 timer, String name);
-// Close the frame: move each timer's totals into its last values and history.
-// Called once per frame by the platform loop, with no timers running.
+// Close the frame: record each timer's total in its history and its call count
+// in last_calls. Called once per frame by the platform loop, with no timers running.
 void          profile_frame_end(void);
-// A timer's results in the bound profile, or NULL if the module is unbound.
-ProfileTimer* profile_get(u64 timer);
+// A timer's total for a completed frame in the bound profile, frames_ago 0
+// being the last one. 0 past the recorded history or in an unbound module.
+u64           profile_history_ns(u64 timer, u32 frames_ago);
+// Frames recorded by the bound profile so far, not capped at PROFILE_HISTORY_LEN.
+u64           profile_frames_recorded(void);
 // Log name, last, average, and max time, and calls, for every enabled timer that has run.
 void          profile_log(u64 log_layer);
 // Use profile_begin, profile_end, and profile_add rather than calling these directly.
@@ -126,18 +124,26 @@ static i32 profile_timer_index(u64 timer) {
     return index;
 }
 
-static void profile_name_write(Profile* profile, i32 index, String name) {
-    u64 len = name.len < PROFILE_NAME_MAX - 1 ? name.len : PROFILE_NAME_MAX - 1;
-    memcpy(profile->timers[index].name, name.text, len);
-    profile->timers[index].name[len] = '\0';
+// A timer's name by index, written to buf if it has to be made up
+static char* profile_timer_name(i32 index, char* buf) {
+    char* name = NULL;
+    if(index < PROFILE_ENGINE_TIMERS_LEN) {
+        name = profile_engine_timer_names[index];
+    } else if(profile_global != NULL && profile_global->game_names[index - PROFILE_ENGINE_TIMERS_LEN][0] != '\0') {
+        name = profile_global->game_names[index - PROFILE_ENGINE_TIMERS_LEN];
+    }
+    if(name == NULL) {
+        snprintf(buf, PROFILE_NAME_MAX, "%s:%i", index < PROFILE_ENGINE_TIMERS_LEN ? "engine" : "game",
+                 index < PROFILE_ENGINE_TIMERS_LEN ? index : index - PROFILE_ENGINE_TIMERS_LEN);
+        name = buf;
+    }
+    return name;
 }
 
 u64 profile_time_ns(void) {
 #if PLATFORM == PLATFORM_WINDOWS
-    static LARGE_INTEGER frequency = { 0 };
-    if(frequency.QuadPart == 0) {
-        QueryPerformanceFrequency(&frequency);
-    }
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
     // Split into seconds and remainder so the multiply can't overflow
@@ -156,11 +162,6 @@ u64 profile_time_ns(void) {
 
 void profile_init(Profile* profile) {
     memset(profile, 0, sizeof(Profile));
-    for(i32 i = 0; i < PROFILE_ENGINE_TIMERS_LEN; i++) {
-        if(profile_engine_timer_names[i] != NULL) {
-            profile_name_write(profile, i, string_const(profile_engine_timer_names[i]));
-        }
-    }
 }
 
 void profile_bind(Profile* profile) {
@@ -169,81 +170,76 @@ void profile_bind(Profile* profile) {
 
 void profile_set_name(u64 timer, String name) {
     assert(profile_global != NULL);
-    profile_name_write(profile_global, profile_timer_index(timer), name);
+    i32 index = profile_timer_index(timer);
+    assert(index >= PROFILE_ENGINE_TIMERS_LEN);
+    char* dst = profile_global->game_names[index - PROFILE_ENGINE_TIMERS_LEN];
+    u64 len = name.len < PROFILE_NAME_MAX - 1 ? name.len : PROFILE_NAME_MAX - 1;
+    memcpy(dst, name.text, len);
+    dst[len] = '\0';
 }
 
 void profile_frame_end(void) {
     if(profile_global == NULL) return;
     Profile* profile = profile_global;
-    u64 history_len = profile->frame_count + 1 < PROFILE_HISTORY_LEN ? profile->frame_count + 1 : PROFILE_HISTORY_LEN;
     for(i32 i = 0; i < PROFILE_TIMERS_LEN; i++) {
         ProfileTimer* timer = &profile->timers[i];
-        if(timer->running) {
-            fprintf(stderr, "Profile timer %i (%s) is still running at the end of the frame\n", i, timer->name);
+        if(timer->start_ns != 0) {
+            char buf[PROFILE_NAME_MAX];
+            fprintf(stderr, "Profile timer %i (%s) is still running at the end of the frame\n", i, profile_timer_name(i, buf));
             panic();
         }
-
-        // A timer that hasn't run this frame or in the history has nothing to update
-        if(timer->accum_calls == 0 && timer->history_sum == 0 && timer->last_calls == 0) {
-            continue;
-        }
-
-        // Record the frame, replacing the oldest entry in the ring
-        u64 evicted = timer->history[profile->history_index];
-        timer->last_ns = timer->accum_ns;
-        timer->last_calls = timer->accum_calls;
         timer->history[profile->history_index] = timer->accum_ns;
+        timer->last_calls = timer->accum_calls;
         timer->accum_ns = 0;
         timer->accum_calls = 0;
-
-        // Average and max over the filled part of the ring. The max only needs
-        // a rescan when the entry that held it was evicted.
-        timer->history_sum = timer->history_sum - evicted + timer->last_ns;
-        timer->average_ns = timer->history_sum / history_len;
-        if(timer->last_ns >= timer->max_ns) {
-            timer->max_ns = timer->last_ns;
-        } else if(evicted == timer->max_ns) {
-            u64 max = 0;
-            for(i32 j = 0; j < PROFILE_HISTORY_LEN; j++) {
-                if(timer->history[j] > max) {
-                    max = timer->history[j];
-                }
-            }
-            timer->max_ns = max;
-        }
     }
     profile->history_index = (profile->history_index + 1) % PROFILE_HISTORY_LEN;
     profile->frame_count++;
 }
 
-ProfileTimer* profile_get(u64 timer) {
-    if(profile_global == NULL) return NULL;
-    return &profile_global->timers[profile_timer_index(timer)];
+u64 profile_history_ns(u64 timer, u32 frames_ago) {
+    if(profile_global == NULL || frames_ago >= PROFILE_HISTORY_LEN || frames_ago >= profile_global->frame_count) return 0;
+    u32 slot = (profile_global->history_index + PROFILE_HISTORY_LEN - 1 - frames_ago) % PROFILE_HISTORY_LEN;
+    return profile_global->timers[profile_timer_index(timer)].history[slot];
+}
+
+u64 profile_frames_recorded(void) {
+    return profile_global != NULL ? profile_global->frame_count : 0;
 }
 
 void profile_log(u64 log_layer) {
     if(profile_global == NULL) return;
+    u64 filled = profile_global->frame_count < PROFILE_HISTORY_LEN ? profile_global->frame_count : PROFILE_HISTORY_LEN;
     for(i32 i = 0; i < PROFILE_TIMERS_LEN; i++) {
         ProfileTimer* timer = &profile_global->timers[i];
-        if(((1ull << i) & (PROFILE_MASK)) == 0 || timer->max_ns == 0) {
+        if(((1ull << i) & (PROFILE_MASK)) == 0) {
             continue;
         }
-        char game_name[PROFILE_NAME_MAX];
-        char* name = timer->name;
-        if(name[0] == '\0') {
-            snprintf(game_name, PROFILE_NAME_MAX, "game:%i", i - PROFILE_ENGINE_TIMERS_LEN);
-            name = game_name;
+
+        // Average and max over the recorded history
+        u64 sum = 0;
+        u64 max = 0;
+        for(u32 j = 0; j < filled; j++) {
+            u64 ns = profile_history_ns(1ull << i, j);
+            sum += ns;
+            if(ns > max) {
+                max = ns;
+            }
         }
+        if(max == 0 && timer->last_calls == 0) {
+            continue;
+        }
+        char buf[PROFILE_NAME_MAX];
         log_print(log_layer, "Profile %-24s last %8.3f ms, average %8.3f ms, max %8.3f ms, %u calls last frame",
-                  name, (f64)timer->last_ns / 1e6, (f64)timer->average_ns / 1e6, (f64)timer->max_ns / 1e6, timer->last_calls);
+                  profile_timer_name(i, buf), (f64)profile_history_ns(1ull << i, 0) / 1e6, (f64)sum / (f64)filled / 1e6,
+                  (f64)max / 1e6, timer->last_calls);
     }
 }
 
 void profile_timer_begin(u64 timer) {
     if(profile_global == NULL) return;
     ProfileTimer* profile_timer = &profile_global->timers[profile_timer_index(timer)];
-    assert(!profile_timer->running);
-    profile_timer->running = true;
+    assert(profile_timer->start_ns == 0);
     profile_timer->start_ns = profile_time_ns();
 }
 
@@ -251,9 +247,9 @@ void profile_timer_end(u64 timer) {
     u64 end_ns = profile_time_ns();
     if(profile_global == NULL) return;
     ProfileTimer* profile_timer = &profile_global->timers[profile_timer_index(timer)];
-    assert(profile_timer->running);
-    profile_timer->running = false;
+    assert(profile_timer->start_ns != 0);
     profile_timer->accum_ns += end_ns - profile_timer->start_ns;
+    profile_timer->start_ns = 0;
     profile_timer->accum_calls++;
 }
 

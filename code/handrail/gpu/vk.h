@@ -71,12 +71,10 @@ typedef struct {
 
 typedef struct {
     VkInstance               instance;
-    VkDebugUtilsMessengerEXT debug_messenger;
     VkSurfaceKHR             surface;
     VkPhysicalDevice         physical_device;
     VkDevice                 device;
     VkQueue                  queue;
-    u32                      queue_family;
     VkCommandPool            command_pool;
 
     // Swapchain and depth buffer, recreated on resize
@@ -88,6 +86,7 @@ typedef struct {
     VkSemaphore              render_finished[VK_MAX_SWAPCHAIN_IMAGES];
     u32                      swapchain_images_len;
     bool                     swapchain_stale;
+    iv2                      swapchain_window_size; // The window size the swapchain was built for
     VkArena                  depth_arena;
     VkImage                  depth_image;
     VkImageView              depth_view;
@@ -125,8 +124,9 @@ typedef struct {
 void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window_size, Stack* scratch);
 // Upload the regions and textures the game asked for and build its pipelines.
 void vk_load_assets(VkContext* vk, RenderSetup* setup);
-// Wait for a free frame, acquire a swapchain image, and point frame at that frame's memory.
-void vk_frame_begin(VkContext* vk, iv2 window_size, bool window_resized, RenderFrame* frame);
+// Wait for a free frame, acquire a swapchain image, and point frame at that frame's
+// memory. Recreates the swapchain when window_size has changed since it was built.
+void vk_frame_begin(VkContext* vk, iv2 window_size, RenderFrame* frame);
 // Record, submit, and present everything the game wrote into frame.
 void vk_frame_end(VkContext* vk, RenderFrame* frame);
 
@@ -288,6 +288,7 @@ static VkImageView vk_image_view_new(VkContext* vk, VkImage image, VkFormat form
 // Create (or recreate) the swapchain, its views, and the depth buffer. reason
 // is only logged.
 static void vk_swapchain_create(VkContext* vk, iv2 window_size, char* reason) {
+    vk->swapchain_window_size = window_size;
     VkSwapchainKHR old_swapchain = vk->swapchain;
     if(old_swapchain != VK_NULL_HANDLE) {
         VK_VERIFY(vkDeviceWaitIdle(vk->device));
@@ -446,7 +447,9 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
         messenger_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         messenger_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         messenger_info.pfnUserCallback = vk_debug_callback;
-        VK_VERIFY(vkCreateDebugUtilsMessengerEXT(vk->instance, &messenger_info, NULL, &vk->debug_messenger));
+        // Never destroyed: it lives as long as the process
+        VkDebugUtilsMessengerEXT debug_messenger;
+        VK_VERIFY(vkCreateDebugUtilsMessengerEXT(vk->instance, &messenger_info, NULL, &debug_messenger));
     }
 
     // Surface
@@ -468,6 +471,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
 
     // Physical device: prefer a discrete GPU with a queue family that can
     // both draw and present to our surface.
+    u32 queue_family = 0;
     u32 devices_len = 0;
     VK_VERIFY(vkEnumeratePhysicalDevices(vk->instance, &devices_len, NULL));
     VkPhysicalDevice* devices = (VkPhysicalDevice*)stack_alloc(scratch, devices_len * sizeof(VkPhysicalDevice));
@@ -503,7 +507,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
         if(score > best_score) {
             best_score = score;
             vk->physical_device = devices[i];
-            vk->queue_family = family;
+            queue_family = family;
         }
     }
     if(best_score == -1) {
@@ -515,13 +519,13 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     log_print(LOG_RENDER, "Vulkan device: type %i, API %u.%u.%u, driver 0x%x, queue family %u",
               (i32)device_properties.deviceType,
               VK_API_VERSION_MAJOR(device_properties.apiVersion), VK_API_VERSION_MINOR(device_properties.apiVersion),
-              VK_API_VERSION_PATCH(device_properties.apiVersion), device_properties.driverVersion, vk->queue_family);
+              VK_API_VERSION_PATCH(device_properties.apiVersion), device_properties.driverVersion, queue_family);
 
     // Device
     f32 queue_priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {};
     queue_info.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_info.queueFamilyIndex = vk->queue_family;
+    queue_info.queueFamilyIndex = queue_family;
     queue_info.queueCount       = 1;
     queue_info.pQueuePriorities = &queue_priority;
 
@@ -555,7 +559,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     device_info.pEnabledFeatures        = &vk10_features;
     VK_VERIFY(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
     volkLoadDevice(vk->device);
-    vkGetDeviceQueue(vk->device, vk->queue_family, 0, &vk->queue);
+    vkGetDeviceQueue(vk->device, queue_family, 0, &vk->queue);
 
     // Swapchain format: prefer 8-bit BGRA/RGBA UNORM, otherwise whatever comes first
     u32 formats_len = 0;
@@ -576,7 +580,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     VkCommandPoolCreateInfo pool_info = {};
     pool_info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_info.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pool_info.queueFamilyIndex = vk->queue_family;
+    pool_info.queueFamilyIndex = queue_family;
     VK_VERIFY(vkCreateCommandPool(vk->device, &pool_info, NULL, &vk->command_pool));
 
     // GPU timestamps, if the queue family supports them
@@ -584,9 +588,9 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     vkGetPhysicalDeviceQueueFamilyProperties(vk->physical_device, &families_len, NULL);
     VkQueueFamilyProperties* families = (VkQueueFamilyProperties*)stack_alloc(scratch, families_len * sizeof(VkQueueFamilyProperties));
     vkGetPhysicalDeviceQueueFamilyProperties(vk->physical_device, &families_len, families);
-    u32 timestamp_bits = families[vk->queue_family].timestampValidBits;
+    u32 timestamp_bits = families[queue_family].timestampValidBits;
     if(timestamp_bits == 0 || device_properties.limits.timestampPeriod == 0.0f) {
-        log_print(LOG_RENDER, "Vulkan: queue family %u can't write timestamps, GPU frame time is off", vk->queue_family);
+        log_print(LOG_RENDER, "Vulkan: queue family %u can't write timestamps, GPU frame time is off", queue_family);
     } else {
         vk->timestamp_period = device_properties.limits.timestampPeriod;
         vk->timestamp_mask = timestamp_bits >= 64 ? ~0ull : (1ull << timestamp_bits) - 1;
@@ -957,7 +961,7 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
     vk->pipelines_len = setup->passes_len;
 }
 
-void vk_frame_begin(VkContext* vk, iv2 window_size, bool window_resized, RenderFrame* out_frame) {
+void vk_frame_begin(VkContext* vk, iv2 window_size, RenderFrame* out_frame) {
     VkFrame* frame = &vk->frames[vk->frame_index];
     VK_VERIFY(vkWaitForFences(vk->device, 1, &frame->fence, VK_TRUE, UINT64_MAX));
 
@@ -972,6 +976,7 @@ void vk_frame_begin(VkContext* vk, iv2 window_size, bool window_resized, RenderF
     }
 
     // Acquire a swapchain image, recreating the swapchain when it no longer fits the window
+    bool window_resized = !iv2_eq(window_size, vk->swapchain_window_size);
     if(window_resized || vk->swapchain_stale) {
         vk_swapchain_create(vk, window_size, window_resized ? "window resized" : "stale");
     }

@@ -46,7 +46,6 @@ typedef struct {
     PlatformEventType type;
     union {
         PlatformKey key;
-        iv2         viewport_size;
         // Position is in window pixels, origin bottom left
         struct {
             PlatformMouseButton button;
@@ -58,8 +57,9 @@ typedef struct {
 typedef struct {
     Log*          log;
     Profile*      profile;
+    // Scratch memory for the game, cleared after every frame
+    Stack*        frame_stack;
     iv2           window_size;
-    bool          window_size_updated_this_frame;
     // In window pixels, origin bottom left. Outside the window while a drag is captured.
     iv2           mouse_position;
     PlatformEvent events[PLATFORM_MAX_EVENTS_PER_FRAME];

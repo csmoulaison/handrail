@@ -199,7 +199,6 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 log_print(LOG_PLATFORM, "Window resized %ix%i -> %ix%i",
                           context->platform.window_size.x, context->platform.window_size.y, window_size.x, window_size.y);
                 context->platform.window_size = window_size;
-                context->platform.window_size_updated_this_frame = true;
             }
             return 0;
         } break;
@@ -341,6 +340,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     profile_init(&context->profile);
     profile_bind(&context->profile);
     context->platform.profile = &context->profile;
+    context->platform.frame_stack = &platform_frame_stack;
     log_print(LOG_INFO, "%s starting on Windows, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
               GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
     log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
@@ -368,7 +368,6 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     RECT client_rect;
     GetClientRect(context->hwnd, &client_rect);
     context->platform.window_size = iv2_new(client_rect.right, client_rect.bottom);
-    context->platform.window_size_updated_this_frame = false;
     log_print(LOG_PLATFORM, "Window created, 1280x720 requested, client area %ix%i",
               context->platform.window_size.x, context->platform.window_size.y);
 
@@ -499,10 +498,10 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         RenderFrame render_frame;
         if(!minimized) {
             profile_begin(PROFILE_RENDER_BEGIN);
-            vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+            vk_frame_begin(vk, context->platform.window_size, &render_frame);
             profile_end(PROFILE_RENDER_BEGIN);
             profile_begin(PROFILE_GAME_UPDATE);
-            context->game.update(game_stack.memory, &render_frame, &context->platform);
+            context->game.update(game_stack.memory, asset_pack_data, &render_frame, &context->platform);
             profile_end(PROFILE_GAME_UPDATE);
         }
 
@@ -518,7 +517,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         log_print(LOG_AUDIO_VERBOSE, "WASAPI ring %i frames queued, writing %i frames", queued_frames, frames_len);
         if(frames_len > 0) {
             f32* samples = (f32*)(audio->ring + (write_offset & (audio->ring_size - 1)));
-            context->game.audio_callback(game_stack.memory, samples, frames_len);
+            context->game.audio_callback(game_stack.memory, asset_pack_data, samples, frames_len);
             InterlockedAdd(&audio->write_offset, (LONG)(frames_len * AUDIO_BYTES_PER_FRAME));
         }
         profile_end(PROFILE_AUDIO);
@@ -547,7 +546,6 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         // Prepare for next frame
         stack_clear(&platform_frame_stack);
         game_library_update(&context->game);
-        context->platform.window_size_updated_this_frame = false;
         context->platform.events_len = 0;
 
         // Frame timing
@@ -692,6 +690,7 @@ i32 main(i32 argc, char** argv) {
     profile_init(&context->profile);
     profile_bind(&context->profile);
     context->platform.profile = &context->profile;
+    context->platform.frame_stack = &platform_frame_stack;
     log_print(LOG_INFO, "%s starting on Linux, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
               GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
     log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
@@ -823,7 +822,6 @@ i32 main(i32 argc, char** argv) {
                         log_print(LOG_PLATFORM, "Window resized %ix%i -> %ix%i",
                                   context->platform.window_size.x, context->platform.window_size.y, window_size.x, window_size.y);
                         context->platform.window_size = window_size;
-                        context->platform.window_size_updated_this_frame = true;
                     }
                 } break;
                 case KeyPress: {
@@ -862,10 +860,10 @@ i32 main(i32 argc, char** argv) {
         // Update game, which writes the frame straight into GPU memory
         RenderFrame render_frame;
         profile_begin(PROFILE_RENDER_BEGIN);
-        vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+        vk_frame_begin(vk, context->platform.window_size, &render_frame);
         profile_end(PROFILE_RENDER_BEGIN);
         profile_begin(PROFILE_GAME_UPDATE);
-        context->game.update(game_stack.memory, &render_frame, &context->platform);
+        context->game.update(game_stack.memory, asset_pack_data, &render_frame, &context->platform);
         profile_end(PROFILE_GAME_UPDATE);
 
         // Update ALSA sound. An underrun (-EPIPE) stops the stream until it's recovered.
@@ -891,7 +889,7 @@ i32 main(i32 argc, char** argv) {
         log_print(LOG_AUDIO_VERBOSE, "ALSA available %li, delay %li, writing %i frames", (long)available, (long)delay, frames_len);
         if(frames_len > 0) {
             f32* samples = (f32*)stack_alloc(&platform_frame_stack, frames_len * AUDIO_BYTES_PER_FRAME);
-            context->game.audio_callback(game_stack.memory, samples, frames_len);
+            context->game.audio_callback(game_stack.memory, asset_pack_data, samples, frames_len);
             snd_pcm_sframes_t frames_written = snd_pcm_writei(context->alsa_pcm, samples, frames_len);
             if(frames_written == -EPIPE) {
                 log_print(LOG_WARN, "ALSA underrun on write, recovering");
@@ -912,7 +910,6 @@ i32 main(i32 argc, char** argv) {
         // Prepare for next frame
         stack_clear(&platform_frame_stack);
         game_library_update(&context->game);
-        context->platform.window_size_updated_this_frame = false;
         context->platform.events_len = 0;
 
         // Frame timing

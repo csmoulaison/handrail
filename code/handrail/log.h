@@ -73,7 +73,8 @@
 typedef struct {
     u32  targets;
     File file;
-    char layer_names[64][LOG_LAYER_NAME_MAX];
+    // Names set by the game. Engine layers are named by a static table.
+    char game_layer_names[64 - LOG_ENGINE_LAYERS_LEN][LOG_LAYER_NAME_MAX];
 } Log;
 
 // Log a printf-style message on a layer. Compiled out if the layer is not in LOG_MASK.
@@ -87,7 +88,7 @@ void log_close(Log* log);
 // Set the log this module writes to. Each module (executable, game library)
 // must bind separately. An unbound module logs to stdout.
 void log_bind(Log* log);
-// Name a layer in the bound log. Names longer than LOG_LAYER_NAME_MAX-1 are truncated.
+// Name a game layer in the bound log. Names longer than LOG_LAYER_NAME_MAX-1 are truncated.
 void log_set_layer_name(u64 layer, String name);
 // Use log_print rather than calling this directly.
 void log_write(u64 layer, char* file, i32 line, char* format, ...) LOG_PRINTF_FORMAT(4, 5);
@@ -119,22 +120,11 @@ static i32 log_layer_index(u64 layer) {
     return index;
 }
 
-static void log_layer_name_write(Log* log, i32 index, String name) {
-    u64 len = name.len < LOG_LAYER_NAME_MAX - 1 ? name.len : LOG_LAYER_NAME_MAX - 1;
-    memcpy(log->layer_names[index], name.text, len);
-    log->layer_names[index][len] = '\0';
-}
-
 void log_init(Log* log, u32 targets, String path) {
     memset(log, 0, sizeof(Log));
     log->targets = targets;
     if(targets & LOG_TARGET_FILE) {
         log->file = file_open(path, FILE_OPEN_WRITE);
-    }
-    for(i32 i = 0; i < LOG_ENGINE_LAYERS_LEN; i++) {
-        if(log_engine_layer_names[i] != NULL) {
-            log_layer_name_write(log, i, string_const(log_engine_layer_names[i]));
-        }
     }
 }
 
@@ -153,17 +143,22 @@ void log_bind(Log* log) {
 
 void log_set_layer_name(u64 layer, String name) {
     assert(log_global != NULL);
-    log_layer_name_write(log_global, log_layer_index(layer), name);
+    i32 index = log_layer_index(layer);
+    assert(index >= LOG_ENGINE_LAYERS_LEN);
+    char* dst = log_global->game_layer_names[index - LOG_ENGINE_LAYERS_LEN];
+    u64 len = name.len < LOG_LAYER_NAME_MAX - 1 ? name.len : LOG_LAYER_NAME_MAX - 1;
+    memcpy(dst, name.text, len);
+    dst[len] = '\0';
 }
 
 void log_write(u64 layer, char* file, i32 line, char* format, ...) {
     // Look up the layer name
     i32 index = log_layer_index(layer);
     char* name = NULL;
-    if(log_global != NULL && log_global->layer_names[index][0] != '\0') {
-        name = log_global->layer_names[index];
-    } else if(index < LOG_ENGINE_LAYERS_LEN) {
+    if(index < LOG_ENGINE_LAYERS_LEN) {
         name = log_engine_layer_names[index];
+    } else if(log_global != NULL && log_global->game_layer_names[index - LOG_ENGINE_LAYERS_LEN][0] != '\0') {
+        name = log_global->game_layer_names[index - LOG_ENGINE_LAYERS_LEN];
     }
 
     // Format the line. Each line is written with a single call per target so
