@@ -249,6 +249,18 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 .mouse = { .button = button, .position = position } });
             return 0;
         } break;
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
+            // Wheel messages carry screen coordinates
+            POINT point = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+            ScreenToClient(hwnd, &point);
+            iv2 position = iv2_new(point.x, context->platform.window_size.y - point.y);
+            f32 notches = (f32)GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
+            v2 delta = message == WM_MOUSEWHEEL ? v2_new(0.0f, notches) : v2_new(notches, 0.0f);
+            platform_push_event(&context->platform, (PlatformEvent){
+                .type = PLATFORM_EVENT_MOUSE_SCROLL, .scroll = { .delta = delta, .position = position } });
+            return 0;
+        } break;
         default: break;
     }
     return DefWindowProcA(hwnd, message, wparam, lparam);
@@ -814,8 +826,21 @@ i32 main(i32 argc, char** argv) {
                 } break;
                 case ButtonPress:
                 case ButtonRelease: {
-                    // X buttons 4-7 are the scroll wheel
-                    // TODO: scroll wheel
+                    // X buttons 4-7 are the scroll wheel: up, down, left, right. Each
+                    // notch is a press and release; only the press is reported.
+                    if(event.xbutton.button >= Button4 && event.xbutton.button <= 7) {
+                        if(event.type == ButtonPress) {
+                            u32 wheel = event.xbutton.button;
+                            v2 delta = wheel == Button4 ? v2_new(0.0f, 1.0f)
+                                     : wheel == Button5 ? v2_new(0.0f, -1.0f)
+                                     : wheel == 6       ? v2_new(-1.0f, 0.0f)
+                                     :                    v2_new(1.0f, 0.0f);
+                            iv2 position = iv2_new(event.xbutton.x, context->platform.window_size.y - event.xbutton.y);
+                            platform_push_event(&context->platform, (PlatformEvent){
+                                .type = PLATFORM_EVENT_MOUSE_SCROLL, .scroll = { .delta = delta, .position = position } });
+                        }
+                        break;
+                    }
                     if(event.xbutton.button < Button1 || event.xbutton.button > Button3) {
                         log_print(LOG_PLATFORM_VERBOSE, "Unmapped mouse button %u", event.xbutton.button);
                         break;

@@ -40,6 +40,7 @@ typedef enum {
     PLATFORM_EVENT_DEFOCUS,
     PLATFORM_EVENT_MOUSE_DOWN,
     PLATFORM_EVENT_MOUSE_UP,
+    PLATFORM_EVENT_MOUSE_SCROLL,
 } PlatformEventType;
 
 typedef struct {
@@ -51,6 +52,12 @@ typedef struct {
             PlatformMouseButton button;
             iv2                 position;
         } mouse;
+        // Wheel notches, fractional on smooth wheels. Positive y is away from
+        // the user, positive x is to the right. Position is as for mouse.
+        struct {
+            v2  delta;
+            iv2 position;
+        } scroll;
     };
 } PlatformEvent;
 
