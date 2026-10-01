@@ -48,6 +48,8 @@ static inline f32  f32_smoothstep(f32 n);
 static inline f32  f32_smootherstep(f32 n);
 // Smallest power of 2 greater than or equal to value.
 static inline u32  u32_round_up_to_power_of_2(u32 value);
+// Index of the lowest set bit. value must be nonzero.
+static inline i32  u64_lowest_bit_index(u64 value);
 static inline i32  true_mod(i32 a, i32 b);
 // IVector2
 static inline iv2  iv2_new(i32 x, i32 y);
@@ -173,6 +175,17 @@ static inline u32 u32_round_up_to_power_of_2(u32 value) {
     return 1u << (index + 1);
 #else
     return 1u << (32 - __builtin_clz(value - 1));
+#endif
+}
+
+static inline i32 u64_lowest_bit_index(u64 value) {
+    assert(value != 0);
+#if defined(_MSC_VER)
+    unsigned long index;
+    _BitScanForward64(&index, value);
+    return (i32)index;
+#else
+    return __builtin_ctzll(value);
 #endif
 }
 

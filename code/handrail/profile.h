@@ -115,13 +115,7 @@ static char* profile_engine_timer_names[PROFILE_ENGINE_TIMERS_LEN] = {
 };
 
 static i32 profile_timer_index(u64 timer) {
-    assert(timer != 0);
-    i32 index = 0;
-    while((timer & 1) == 0) {
-        timer >>= 1;
-        index++;
-    }
-    return index;
+    return u64_lowest_bit_index(timer);
 }
 
 // A timer's name by index, written to buf if it has to be made up

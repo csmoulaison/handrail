@@ -111,13 +111,7 @@ static char* log_engine_layer_names[LOG_ENGINE_LAYERS_LEN] = {
 };
 
 static i32 log_layer_index(u64 layer) {
-    assert(layer != 0);
-    i32 index = 0;
-    while((layer & 1) == 0) {
-        layer >>= 1;
-        index++;
-    }
-    return index;
+    return u64_lowest_bit_index(layer);
 }
 
 void log_init(Log* log, u32 targets, String path) {
