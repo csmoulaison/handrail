@@ -93,6 +93,9 @@ typedef struct {
     // Scratch memory for the game, cleared after every frame
     Stack*         frame_stack;
     iv2            window_size;
+    // Monotonic nanoseconds, sampled once per frame after the frame wait. With
+    // present wait that tracks vblank, so intervals are even enough for game clocks.
+    u64            time_ns;
     // In window pixels, origin bottom left. Outside the window while a drag is captured.
     iv2            mouse_position;
     PlatformEvent  events[PLATFORM_MAX_EVENTS_PER_FRAME];

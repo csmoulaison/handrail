@@ -550,6 +550,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
             vk_frame_begin(vk, context->platform.window_size, &render_frame);
             profile_end(PROFILE_RENDER_BEGIN);
         }
+        context->platform.time_ns = profile_time_ns();
 
         // Pump Win32 messages, which window_proc turns into platform state and events
         profile_begin(PROFILE_PLATFORM_EVENTS);
@@ -881,6 +882,7 @@ i32 main(i32 argc, char** argv) {
         profile_begin(PROFILE_RENDER_BEGIN);
         vk_frame_begin(vk, context->platform.window_size, &render_frame);
         profile_end(PROFILE_RENDER_BEGIN);
+        context->platform.time_ns = profile_time_ns();
 
         // Poll Xlib events
         profile_begin(PROFILE_PLATFORM_EVENTS);
