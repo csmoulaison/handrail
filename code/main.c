@@ -868,6 +868,14 @@ i32 main(i32 argc, char** argv) {
     while(context->close_requested == false) {
         profile_begin(PROFILE_FRAME);
 
+        // Wait for a free frame and swapchain image before polling, so the game sees
+        // input from after the wait rather than before it. A resize seen in this
+        // frame's events reaches the swapchain next frame.
+        RenderFrame render_frame;
+        profile_begin(PROFILE_RENDER_BEGIN);
+        vk_frame_begin(vk, context->platform.window_size, &render_frame);
+        profile_end(PROFILE_RENDER_BEGIN);
+
         // Poll Xlib events
         profile_begin(PROFILE_PLATFORM_EVENTS);
         // Set by an auto-repeat's release, which is always directly followed by its press
@@ -986,10 +994,6 @@ i32 main(i32 argc, char** argv) {
         profile_end(PROFILE_PLATFORM_EVENTS);
 
         // Update game, which writes the frame straight into GPU memory
-        RenderFrame render_frame;
-        profile_begin(PROFILE_RENDER_BEGIN);
-        vk_frame_begin(vk, context->platform.window_size, &render_frame);
-        profile_end(PROFILE_RENDER_BEGIN);
         profile_begin(PROFILE_GAME_UPDATE);
         context->game.update(game_stack.memory, asset_pack_data, &render_frame, &context->platform);
         profile_end(PROFILE_GAME_UPDATE);

@@ -60,6 +60,14 @@ typedef struct {
     u8*            mapped;
 } VkArena;
 
+// How frame begin paces presents. Version 2 of the extensions is preferred, since
+// it reports support per surface where version 1 only reports it per device.
+typedef enum {
+    VK_PRESENT_WAIT_MODE_NONE, // FIFO alone: the present queue fills up to the image count
+    VK_PRESENT_WAIT_MODE_1,    // VK_KHR_present_id + VK_KHR_present_wait
+    VK_PRESENT_WAIT_MODE_2     // VK_KHR_present_id2 + VK_KHR_present_wait2
+} VkPresentWaitMode;
+
 typedef struct {
     VkCommandBuffer command_buffer;
     VkFence         fence;
@@ -96,6 +104,11 @@ typedef struct {
     u32                      frame_index;
     u32                      image_index;
 
+    // Present pacing: each present is tagged with an id, and frame begin waits for
+    // the last one to reach the screen, so at most one finished frame is queued
+    VkPresentWaitMode        present_wait_mode;
+    u64                      present_id; // Of the last present on this swapchain, 0 before the first
+
     // GPU frame timing: two timestamps per frame in flight, reported as PROFILE_GPU.
     // timestamp_query_pool is VK_NULL_HANDLE if the queue can't write timestamps.
     VkQueryPool              timestamp_query_pool;
@@ -124,8 +137,9 @@ typedef struct {
 void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window_size, Stack* scratch);
 // Upload the regions and textures the game asked for and build its pipelines.
 void vk_load_assets(VkContext* vk, RenderSetup* setup);
-// Wait for a free frame, acquire a swapchain image, and point frame at that frame's
-// memory. Recreates the swapchain when window_size has changed since it was built.
+// Wait for the last present to reach the screen (when present wait is supported) and
+// for a free frame, acquire a swapchain image, and point frame at that frame's memory.
+// Recreates the swapchain when window_size has changed since it was built.
 void vk_frame_begin(VkContext* vk, iv2 window_size, RenderFrame* frame);
 // Record, submit, and present everything the game wrote into frame.
 void vk_frame_end(VkContext* vk, RenderFrame* frame);
@@ -317,14 +331,18 @@ static void vk_swapchain_create(VkContext* vk, iv2 window_size, char* reason) {
     if(extent.height == 0) extent.height = 1;
     vk->swapchain_extent = extent;
 
-    u32 image_count = capabilities.minImageCount + 1;
-    if(capabilities.maxImageCount != 0 && image_count > capabilities.maxImageCount) {
-        image_count = capabilities.maxImageCount;
-    }
+    // Under FIFO, finished frames wait in the present queue until their vblank, so
+    // every image beyond the first is up to a frame of latency. Use the fewest allowed.
+    u32 image_count = capabilities.minImageCount;
 
     // Swapchain
     VkSwapchainCreateInfoKHR swapchain_info = {};
     swapchain_info.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+#ifdef VK_KHR_present_wait2
+    if(vk->present_wait_mode == VK_PRESENT_WAIT_MODE_2) {
+        swapchain_info.flags        = VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR | VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR;
+    }
+#endif
     swapchain_info.surface          = vk->surface;
     swapchain_info.minImageCount    = image_count;
     swapchain_info.imageFormat      = vk->swapchain_format;
@@ -339,6 +357,7 @@ static void vk_swapchain_create(VkContext* vk, iv2 window_size, char* reason) {
     swapchain_info.clipped          = VK_TRUE;
     swapchain_info.oldSwapchain     = old_swapchain;
     VK_VERIFY(vkCreateSwapchainKHR(vk->device, &swapchain_info, NULL, &vk->swapchain));
+    vk->present_id = 0;
     if(old_swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(vk->device, old_swapchain, NULL);
     }
@@ -404,7 +423,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     }
 #endif
 
-    char* extensions[3];
+    char* extensions[4];
     u32 extensions_len = 0;
     extensions[extensions_len++] = VK_KHR_SURFACE_EXTENSION_NAME;
 #if PLATFORM == PLATFORM_LINUX
@@ -415,6 +434,18 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
 #endif
     if(validation) {
         extensions[extensions_len++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    }
+    // Needed to ask whether the surface supports present wait 2
+    bool surface_capabilities2 = false;
+    u32 available_extensions_len = 0;
+    VK_VERIFY(vkEnumerateInstanceExtensionProperties(NULL, &available_extensions_len, NULL));
+    VkExtensionProperties* available_extensions = (VkExtensionProperties*)stack_alloc(scratch, available_extensions_len * sizeof(VkExtensionProperties));
+    VK_VERIFY(vkEnumerateInstanceExtensionProperties(NULL, &available_extensions_len, available_extensions));
+    for(i32 i = 0; i < available_extensions_len; i++) {
+        if(strcmp(available_extensions[i].extensionName, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) == 0) {
+            extensions[extensions_len++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+            surface_capabilities2 = true;
+        }
     }
     for(i32 i = 0; i < extensions_len; i++) {
         log_print(LOG_RENDER, "Vulkan instance extension: %s", extensions[i]);
@@ -521,6 +552,91 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
               VK_API_VERSION_MAJOR(device_properties.apiVersion), VK_API_VERSION_MINOR(device_properties.apiVersion),
               VK_API_VERSION_PATCH(device_properties.apiVersion), device_properties.driverVersion, queue_family);
 
+    // Present wait, preferring version 2. Each version needs its id and wait
+    // extensions, both features, and for version 2, the surface's support too.
+    bool has_present_id = false;
+    bool has_present_wait = false;
+#ifdef VK_KHR_present_wait2
+    bool has_present_id2 = false;
+    bool has_present_wait2 = false;
+#endif
+    u32 device_extensions_available_len = 0;
+    VK_VERIFY(vkEnumerateDeviceExtensionProperties(vk->physical_device, NULL, &device_extensions_available_len, NULL));
+    VkExtensionProperties* device_extensions_available = (VkExtensionProperties*)stack_alloc(scratch, device_extensions_available_len * sizeof(VkExtensionProperties));
+    VK_VERIFY(vkEnumerateDeviceExtensionProperties(vk->physical_device, NULL, &device_extensions_available_len, device_extensions_available));
+    for(i32 i = 0; i < device_extensions_available_len; i++) {
+        char* name = device_extensions_available[i].extensionName;
+        if(strcmp(name, VK_KHR_PRESENT_ID_EXTENSION_NAME) == 0)   has_present_id = true;
+        if(strcmp(name, VK_KHR_PRESENT_WAIT_EXTENSION_NAME) == 0) has_present_wait = true;
+#ifdef VK_KHR_present_wait2
+        if(strcmp(name, VK_KHR_PRESENT_ID_2_EXTENSION_NAME) == 0)   has_present_id2 = true;
+        if(strcmp(name, VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME) == 0) has_present_wait2 = true;
+#endif
+    }
+
+    char* device_extensions[3];
+    u32 device_extensions_len = 0;
+    device_extensions[device_extensions_len++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    void* present_wait_features = NULL; // Chained onto the device's features
+    vk->present_wait_mode = VK_PRESENT_WAIT_MODE_NONE;
+#ifdef VK_KHR_present_wait2
+    VkPhysicalDevicePresentId2FeaturesKHR present_id2_features = {};
+    present_id2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR;
+    VkPhysicalDevicePresentWait2FeaturesKHR present_wait2_features = {};
+    present_wait2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_2_FEATURES_KHR;
+    present_wait2_features.pNext = &present_id2_features;
+    if(surface_capabilities2 && has_present_id2 && has_present_wait2) {
+        VkPhysicalDeviceFeatures2 features = {};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &present_wait2_features;
+        vkGetPhysicalDeviceFeatures2(vk->physical_device, &features);
+
+        VkSurfaceCapabilitiesPresentId2KHR surface_present_id2 = {};
+        surface_present_id2.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR;
+        VkSurfaceCapabilitiesPresentWait2KHR surface_present_wait2 = {};
+        surface_present_wait2.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR;
+        surface_present_wait2.pNext = &surface_present_id2;
+        VkSurfaceCapabilities2KHR surface_capabilities = {};
+        surface_capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
+        surface_capabilities.pNext = &surface_present_wait2;
+        VkPhysicalDeviceSurfaceInfo2KHR surface_info2 = {};
+        surface_info2.sType   = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+        surface_info2.surface = vk->surface;
+        VK_VERIFY(vkGetPhysicalDeviceSurfaceCapabilities2KHR(vk->physical_device, &surface_info2, &surface_capabilities));
+
+        if(present_id2_features.presentId2 && present_wait2_features.presentWait2
+        && surface_present_id2.presentId2Supported && surface_present_wait2.presentWait2Supported) {
+            vk->present_wait_mode = VK_PRESENT_WAIT_MODE_2;
+            device_extensions[device_extensions_len++] = VK_KHR_PRESENT_ID_2_EXTENSION_NAME;
+            device_extensions[device_extensions_len++] = VK_KHR_PRESENT_WAIT_2_EXTENSION_NAME;
+            present_wait_features = &present_wait2_features;
+        }
+    }
+#else
+    (void)surface_capabilities2;
+#endif
+    VkPhysicalDevicePresentIdFeaturesKHR present_id_features = {};
+    present_id_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
+    VkPhysicalDevicePresentWaitFeaturesKHR present_wait1_features = {};
+    present_wait1_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR;
+    present_wait1_features.pNext = &present_id_features;
+    if(vk->present_wait_mode == VK_PRESENT_WAIT_MODE_NONE && has_present_id && has_present_wait) {
+        VkPhysicalDeviceFeatures2 features = {};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &present_wait1_features;
+        vkGetPhysicalDeviceFeatures2(vk->physical_device, &features);
+        if(present_id_features.presentId && present_wait1_features.presentWait) {
+            vk->present_wait_mode = VK_PRESENT_WAIT_MODE_1;
+            device_extensions[device_extensions_len++] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
+            device_extensions[device_extensions_len++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+            present_wait_features = &present_wait1_features;
+        }
+    }
+    log_print(LOG_RENDER, "Vulkan: present wait %s",
+              vk->present_wait_mode == VK_PRESENT_WAIT_MODE_2 ? "2"
+            : vk->present_wait_mode == VK_PRESENT_WAIT_MODE_1 ? "1"
+            : "unsupported, presents can queue up to the swapchain image count");
+
     // Device
     f32 queue_priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {};
@@ -537,6 +653,7 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     vk12_features.runtimeDescriptorArray                    = VK_TRUE;
     vk12_features.bufferDeviceAddress                       = VK_TRUE;
     vk12_features.scalarBlockLayout                         = VK_TRUE;
+    vk12_features.pNext                                     = present_wait_features;
 
     VkPhysicalDeviceVulkan13Features vk13_features = {};
     vk13_features.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -548,13 +665,12 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     vk10_features.multiDrawIndirect         = VK_TRUE;
     vk10_features.drawIndirectFirstInstance = VK_TRUE;
 
-    char* device_extensions[1] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     VkDeviceCreateInfo device_info = {};
     device_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     device_info.pNext                   = &vk13_features;
     device_info.queueCreateInfoCount    = 1;
     device_info.pQueueCreateInfos       = &queue_info;
-    device_info.enabledExtensionCount   = 1;
+    device_info.enabledExtensionCount   = device_extensions_len;
     device_info.ppEnabledExtensionNames = (const char* const*)device_extensions;
     device_info.pEnabledFeatures        = &vk10_features;
     VK_VERIFY(vkCreateDevice(vk->physical_device, &device_info, NULL, &vk->device));
@@ -963,6 +1079,34 @@ void vk_load_assets(VkContext* vk, RenderSetup* setup) {
 
 void vk_frame_begin(VkContext* vk, iv2 window_size, RenderFrame* out_frame) {
     VkFrame* frame = &vk->frames[vk->frame_index];
+
+    // Wait for the last present to reach the screen, so this frame's present is the
+    // only one queued and the input read after this is as fresh as it can be. The
+    // timeout keeps a hidden window, which may never present, from stalling the loop.
+    if(vk->present_wait_mode != VK_PRESENT_WAIT_MODE_NONE && vk->present_id > 0 && !vk->swapchain_stale) {
+        u64 timeout = 100ull * 1000 * 1000;
+        VkResult result = VK_SUCCESS;
+        if(vk->present_wait_mode == VK_PRESENT_WAIT_MODE_1) {
+            result = vkWaitForPresentKHR(vk->device, vk->swapchain, vk->present_id, timeout);
+        } else {
+#ifdef VK_KHR_present_wait2
+            VkPresentWait2InfoKHR wait_info = {};
+            wait_info.sType     = VK_STRUCTURE_TYPE_PRESENT_WAIT_2_INFO_KHR;
+            wait_info.presentId = vk->present_id;
+            wait_info.timeout   = timeout;
+            result = vkWaitForPresent2KHR(vk->device, vk->swapchain, &wait_info);
+#endif
+        }
+        if(result == VK_TIMEOUT) {
+            log_print(LOG_RENDER_VERBOSE, "Vulkan: present %" PRIu64 " not on screen after 100 ms", vk->present_id);
+        } else if(result == VK_ERROR_OUT_OF_DATE_KHR) {
+            log_print(LOG_RENDER, "Vulkan: present wait out of date, recreating swapchain");
+            vk->swapchain_stale = true;
+        } else if(result != VK_SUBOPTIMAL_KHR) {
+            VK_VERIFY(result);
+        }
+    }
+
     VK_VERIFY(vkWaitForFences(vk->device, 1, &frame->fence, VK_TRUE, UINT64_MAX));
 
     // The fence has signaled, so this frame's timestamps from its last use are ready
@@ -1127,6 +1271,28 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
     present_info.swapchainCount     = 1;
     present_info.pSwapchains        = &vk->swapchain;
     present_info.pImageIndices      = &vk->image_index;
+
+    // Tag the present so the next frame begin can wait for it
+    VkPresentIdKHR present_id_info = {};
+    present_id_info.sType          = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+    present_id_info.swapchainCount = 1;
+    present_id_info.pPresentIds    = &vk->present_id;
+#ifdef VK_KHR_present_wait2
+    VkPresentId2KHR present_id2_info = {};
+    present_id2_info.sType          = VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR;
+    present_id2_info.swapchainCount = 1;
+    present_id2_info.pPresentIds    = &vk->present_id;
+    if(vk->present_wait_mode == VK_PRESENT_WAIT_MODE_2) {
+        present_info.pNext = &present_id2_info;
+    }
+#endif
+    if(vk->present_wait_mode == VK_PRESENT_WAIT_MODE_1) {
+        present_info.pNext = &present_id_info;
+    }
+    if(vk->present_wait_mode != VK_PRESENT_WAIT_MODE_NONE) {
+        vk->present_id++;
+    }
+
     VkResult result = vkQueuePresentKHR(vk->queue, &present_info);
     if(result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         log_print(LOG_RENDER, "Vulkan: present %s, recreating swapchain next frame",
