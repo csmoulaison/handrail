@@ -5,6 +5,13 @@
 #define SHADER_SPIRV_TMP_PATH "build/shader.spv"
 #endif
 
+// Searched by #include after the including file's own directory, so game
+// shaders can #include "font_vector.glsl" and the other handrail GLSL files.
+// Relative to the directory prebuild runs in.
+#ifndef SHADER_INCLUDE_PATH
+#define SHADER_INCLUDE_PATH "handrail/code/shaders"
+#endif
+
 typedef enum {
     SHADER_STAGE_VERTEX,
     SHADER_STAGE_FRAGMENT
@@ -18,7 +25,8 @@ typedef struct {
 } ShaderData;
 
 // Compile GLSL to SPIR-V with the Vulkan SDK's glslangValidator and push it as
-// a SHADER asset. #include directives resolve relative to glsl_path. Returns
+// a SHADER asset. #include directives resolve relative to glsl_path, then to
+// SHADER_INCLUDE_PATH. Returns
 // the SHADER handle.
 u64 shader_push_asset(AssetBuilder* builder, String tag, String glsl_path, ShaderStage stage, Stack* stack);
 
@@ -39,7 +47,7 @@ u64 shader_push_asset(AssetBuilder* builder, String tag, String glsl_path, Shade
 #endif
     string_cat(&cmd, string_const(" -V --quiet --target-env vulkan1.3 -S "));
     string_cat(&cmd, stage == SHADER_STAGE_VERTEX ? string_const("vert") : string_const("frag"));
-    string_cat(&cmd, string_const(" -o " SHADER_SPIRV_TMP_PATH " "));
+    string_cat(&cmd, string_const(" -I\"" SHADER_INCLUDE_PATH "\" -o " SHADER_SPIRV_TMP_PATH " "));
     string_cat(&cmd, glsl_path);
     string_write_null_terminator(&cmd);
     log_print(LOG_ASSET, "Compiling shader: %s", cmd.text);

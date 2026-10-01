@@ -17,6 +17,7 @@
 // descriptor set:
 //   layout(set = 0, binding = 0) uniform texture2D textures[RENDER_MAX_TEXTURES];
 //   layout(set = 0, binding = 1) uniform sampler   samplers[RENDER_MAX_SAMPLERS];
+// handrail/code/shaders/render.glsl declares it for game shaders to #include.
 
 #ifndef RENDER_MAX_BUFFER_REGIONS
 #define RENDER_MAX_BUFFER_REGIONS 8
