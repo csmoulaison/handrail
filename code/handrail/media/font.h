@@ -83,9 +83,27 @@ typedef struct {
     FontVectorMetrics glyphs[FONT_GLYPH_COUNT];
 } FontVectorData;
 
+// One glyph placed by font_vector_layout. Glyphs without an outline, such as
+// space, are skipped, so every placement has something to draw. Its em-space
+// bounds are in FONT_VECTOR_GLYPHS at glyph, or on the CPU at
+// font->glyphs[glyph - font->first_glyph].
+typedef struct {
+    u32 glyph;  // Index into FONT_VECTOR_GLYPHS (font->first_glyph + code)
+    v2  origin; // Pen position on the baseline, in the caller's units, y up
+} FontVectorPlacement;
+
 // Normalized x, y, w, h of a glyph within the font's atlas
 v4  font_glyph_src(FontData* font, FontGlyph* glyph);
 u64 font_size();
+
+// Lay out text with its first baseline starting at origin, at size units to
+// the em. '\n' starts a new line, and each other byte is one glyph. Writes at
+// most text.len placements to out_placements and returns how many it wrote.
+// TODO: kerning and UTF-8 decoding
+u32 font_vector_layout(FontVectorData* font, String text, v2 origin, f32 size, FontVectorPlacement* out_placements);
+// Size of text's line box as font_vector_layout lays it out: the widest
+// line's advances by the first line's ascender to the last line's descender.
+v2  font_vector_measure(FontVectorData* font, String text, f32 size);
 
 #ifdef HANDRAIL_FONT_PROCESSING
 #include <ft2build.h>
@@ -134,6 +152,44 @@ v4 font_glyph_src(FontData* font, FontGlyph* glyph) {
 
 u64 font_size() {
     return sizeof(FontData);
+}
+
+u32 font_vector_layout(FontVectorData* font, String text, v2 origin, f32 size, FontVectorPlacement* out_placements) {
+    u32 placements_len = 0;
+    v2 pen = origin;
+    for(i32 i = 0; i < text.len; i++) {
+        u8 c = (u8)text.text[i];
+        if(c == '\n') {
+            pen.x = origin.x;
+            pen.y -= font->line_height * size;
+            continue;
+        }
+        FontVectorMetrics* metrics = &font->glyphs[c];
+        if(metrics->bounds.z > metrics->bounds.x) {
+            out_placements[placements_len++] = (FontVectorPlacement){ .glyph = font->first_glyph + c, .origin = pen };
+        }
+        pen.x += metrics->advance * size;
+    }
+    return placements_len;
+}
+
+v2 font_vector_measure(FontVectorData* font, String text, f32 size) {
+    f32 width = 0.0f;
+    f32 line_width = 0.0f;
+    i32 lines = 1;
+    for(i32 i = 0; i < text.len; i++) {
+        u8 c = (u8)text.text[i];
+        if(c == '\n') {
+            width = f32_max(width, line_width);
+            line_width = 0.0f;
+            lines++;
+            continue;
+        }
+        line_width += font->glyphs[c].advance;
+    }
+    width = f32_max(width, line_width);
+    f32 height = font->ascender - font->descender + (lines - 1) * font->line_height;
+    return v2_scale(v2_new(width, height), size);
 }
 
 #ifdef HANDRAIL_FONT_PROCESSING
