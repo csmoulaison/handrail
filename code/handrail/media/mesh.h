@@ -46,6 +46,9 @@ typedef struct {
 MeshData*        mesh_from_obj(File* file, Stack* stack);
 u64              mesh_size_from_vertices_len(u64 vertices_len);
 u64              mesh_size(MeshData* data);
+// A box centered on the origin, flat shaded, 36 vertices. Each face's uvs span
+// the whole texture.
+MeshData*        mesh_box(v3 size, Stack* stack);
 // Push a MESH header plus its vertices. Returns the MESH handle.
 u64              mesh_push_asset(AssetBuilder* builder, String tag, MeshData* mesh);
 
@@ -208,6 +211,29 @@ u64 mesh_size_from_vertices_len(u64 vertices_len) {
 
 u64 mesh_size(MeshData* mesh) {
     return mesh_size_from_vertices_len(mesh->vertices_len);
+}
+
+MeshData* mesh_box(v3 size, Stack* stack) {
+    // Each face spans axes u and v with u x v = normal, so its triangles wind
+    // counter-clockwise seen from outside
+    v3 face_normals[6] = { {{{ 1, 0, 0}}}, {{{-1, 0, 0}}}, {{{ 0, 1, 0}}}, {{{ 0,-1, 0}}}, {{{ 0, 0, 1}}}, {{{ 0, 0,-1}}} };
+    v3 face_us[6]      = { {{{ 0, 1, 0}}}, {{{ 0, 0, 1}}}, {{{ 0, 0, 1}}}, {{{ 1, 0, 0}}}, {{{ 1, 0, 0}}}, {{{ 0, 1, 0}}} };
+    v3 face_vs[6]      = { {{{ 0, 0, 1}}}, {{{ 0, 1, 0}}}, {{{ 1, 0, 0}}}, {{{ 0, 0, 1}}}, {{{ 0, 1, 0}}}, {{{ 1, 0, 0}}} };
+    v2 face_corners[6] = { {{{0, 0}}}, {{{1, 0}}}, {{{1, 1}}}, {{{0, 0}}}, {{{1, 1}}}, {{{0, 1}}} };
+    MeshData* box = (MeshData*)stack_alloc(stack, mesh_size_from_vertices_len(36));
+    box->vertices_len = 36;
+    for(i32 face = 0; face < 6; face++) {
+        for(i32 corner = 0; corner < 6; corner++) {
+            MeshVertexData* vertex = &box->vertices[face * 6 + corner];
+            v2 c = face_corners[corner];
+            v3 unit = v3_add(v3_scale(face_normals[face], 0.5f),
+                      v3_add(v3_scale(face_us[face], c.x - 0.5f), v3_scale(face_vs[face], c.y - 0.5f)));
+            vertex->position = v3_new(unit.x * size.x, unit.y * size.y, unit.z * size.z);
+            vertex->normal = face_normals[face];
+            vertex->uv = c;
+        }
+    }
+    return box;
 }
 
 u64 mesh_push_asset(AssetBuilder* builder, String tag, MeshData* mesh) {

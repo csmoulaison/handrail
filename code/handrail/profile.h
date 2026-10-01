@@ -84,6 +84,9 @@ void          profile_init(Profile* profile);
 void          profile_bind(Profile* profile);
 // Name a game timer in the bound profile. Names longer than PROFILE_NAME_MAX-1 are truncated.
 void          profile_set_name(u64 timer, String name);
+// A timer's name in the bound profile: the engine's own, or the one the game
+// set. Empty for an unnamed game timer or in an unbound module.
+String        profile_name(u64 timer);
 // Close the frame: record each timer's total in its history and its call count
 // in last_calls. Called once per frame by the platform loop, with no timers running.
 void          profile_frame_end(void);
@@ -170,6 +173,15 @@ void profile_set_name(u64 timer, String name) {
     u64 len = name.len < PROFILE_NAME_MAX - 1 ? name.len : PROFILE_NAME_MAX - 1;
     memcpy(dst, name.text, len);
     dst[len] = '\0';
+}
+
+String profile_name(u64 timer) {
+    i32 index = profile_timer_index(timer);
+    if(index < PROFILE_ENGINE_TIMERS_LEN) {
+        return string_const(profile_engine_timer_names[index] != NULL ? profile_engine_timer_names[index] : "");
+    }
+    if(profile_global == NULL) return string_const("");
+    return string_const(profile_global->game_names[index - PROFILE_ENGINE_TIMERS_LEN]);
 }
 
 void profile_frame_end(void) {

@@ -107,6 +107,9 @@ static inline f32 radians(f32 degrees);
 // TODO: Make res (dst) the first parameter rather than last.
 void m4_identity(f32* res);
 void m4_perspective(f32 fovy, f32 aspect, f32 zfar, f32 znear, f32* res);
+// Map the box from (left, bottom, -znear) to (right, top, -zfar) onto clip space,
+// with OpenGL depth in [-1, 1] like m4_perspective.
+void m4_orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 znear, f32 zfar, f32* res);
 void m4_lookat(v3 origin, v3 target, v3 up, f32* res);
 void m4_mul(f32* a, f32* b, f32* res);
 static inline void m4_translation(v3 v, f32* res);
@@ -424,6 +427,21 @@ void m4_perspective(f32 fovy, f32 aspect, f32 zfar, f32 znear, f32* res) {
     res[10] = - (zfar + znear) / (zfar - znear);
     res[11] = - 1.0f;
     res[14] = - (2.0f * zfar * znear) / (zfar - znear);
+}
+
+void m4_orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 znear, f32 zfar, f32* res) {
+    assert(right != left && top != bottom && zfar != znear);
+
+    for(i8 i = 0; i < 16; i++) {
+        res[i] = 0.0f;
+    }
+    res[0] = 2.0f / (right - left);
+    res[5] = 2.0f / (top - bottom);
+    res[10] = - 2.0f / (zfar - znear);
+    res[12] = - (right + left) / (right - left);
+    res[13] = - (top + bottom) / (top - bottom);
+    res[14] = - (zfar + znear) / (zfar - znear);
+    res[15] = 1.0f;
 }
 
 void m4_lookat(v3 origin, v3 target, v3 up, f32* res) {
