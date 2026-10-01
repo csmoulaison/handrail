@@ -22,6 +22,8 @@ String string_from_stack(Stack* stack, u64 capacity);
 
 // Return true if both strings have equal length and the same characters.
 bool string_equals(String a, String b);
+// Return true if needle appears in haystack as an exact substring. An empty needle always does.
+bool string_contains(String haystack, String needle);
 
 // Set the string length to 0, leaving its capacity intact.
 void string_clear(String* string);
@@ -198,6 +200,14 @@ bool string_equals(String a, String b) {
         }
     }
     return true;
+}
+
+bool string_contains(String haystack, String needle) {
+    if(needle.len > haystack.len) return false;
+    for(u64 i = 0; i + needle.len <= haystack.len; i++) {
+        if(memcmp(haystack.text + i, needle.text, needle.len) == 0) return true;
+    }
+    return false;
 }
 
 void string_clear(String* string) {

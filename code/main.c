@@ -160,9 +160,36 @@ PlatformKey platform_key_from_win32_virtual_key(WPARAM virtual_key) {
         case VK_F3: {
             return PLATFORM_KEY_F3;
         } break;
+        case VK_BACK: {
+            return PLATFORM_KEY_BACKSPACE;
+        } break;
+        case VK_DELETE: {
+            return PLATFORM_KEY_DELETE;
+        } break;
+        case 'H': {
+            return PLATFORM_KEY_H;
+        } break;
+        case 'J': {
+            return PLATFORM_KEY_J;
+        } break;
+        case 'K': {
+            return PLATFORM_KEY_K;
+        } break;
+        case 'L': {
+            return PLATFORM_KEY_L;
+        } break;
         default: return PLATFORM_KEY_NONE;
     }
     return PLATFORM_KEY_NONE;
+}
+
+// Modifier keys held as of the message being processed
+u32 platform_modifiers_from_win32() {
+    u32 modifiers = PLATFORM_MODIFIER_NONE;
+    if(GetKeyState(VK_SHIFT)   & 0x8000) modifiers |= PLATFORM_MODIFIER_SHIFT;
+    if(GetKeyState(VK_CONTROL) & 0x8000) modifiers |= PLATFORM_MODIFIER_CTRL;
+    if(GetKeyState(VK_MENU)    & 0x8000) modifiers |= PLATFORM_MODIFIER_ALT;
+    return modifiers;
 }
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -203,19 +230,28 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             return 0;
         } break;
         case WM_KEYDOWN: {
-            // Bit 30 is set if the key was already down, i.e. this is an auto-repeat
-            if((lparam & (1 << 30)) == 0) {
-                PlatformKey key = platform_key_from_win32_virtual_key(wparam);
-                if(key == PLATFORM_KEY_NONE) {
-                    log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: virtual key 0x%x", (u32)wparam);
-                }
-                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYDOWN, .key = key });
+            PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+            if(key == PLATFORM_KEY_NONE) {
+                log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: virtual key 0x%x", (u32)wparam);
             }
+            // Bit 30 is set if the key was already down, i.e. this is an auto-repeat
+            PlatformEventType type = (lparam & (1 << 30)) ? PLATFORM_EVENT_KEYREPEAT : PLATFORM_EVENT_KEYDOWN;
+            platform_push_event(&context->platform, (PlatformEvent){
+                .type = type, .modifiers = platform_modifiers_from_win32(), .key = key });
             return 0;
         } break;
         case WM_KEYUP: {
             PlatformKey key = platform_key_from_win32_virtual_key(wparam);
-            platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYUP, .key = key });
+            platform_push_event(&context->platform, (PlatformEvent){
+                .type = PLATFORM_EVENT_KEYUP, .modifiers = platform_modifiers_from_win32(), .key = key });
+            return 0;
+        } break;
+        // Generated from keydowns by TranslateMessage
+        case WM_CHAR: {
+            // TODO: Combine UTF-16 surrogate pairs. Their halves are dropped for now.
+            if(wparam >= 0xD800 && wparam <= 0xDFFF) return 0;
+            platform_push_event(&context->platform, (PlatformEvent){
+                .type = PLATFORM_EVENT_CHAR, .modifiers = platform_modifiers_from_win32(), .codepoint = (u32)wparam });
             return 0;
         } break;
         case WM_MOUSEMOVE:
@@ -480,6 +516,9 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 
     dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
     game_library_update(&context->game);
+    if(context->game.init == NULL) {
+        log_exit("Couldn't load the game library %s. It is found relative to the working directory.", GAME_LIB_NAME);
+    }
     RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
     log_print(LOG_ASSET, "Asset pack: %" PRIu64 " bytes", (u64)ASSET_PACK_SIZE);
     context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
@@ -687,9 +726,36 @@ PlatformKey platform_key_from_xlib_keysym(u32 keysym) {
         case XK_F3: {
             return PLATFORM_KEY_F3;
         } break;
+        case XK_BackSpace: {
+            return PLATFORM_KEY_BACKSPACE;
+        } break;
+        case XK_Delete: {
+            return PLATFORM_KEY_DELETE;
+        } break;
+        case XK_h: {
+            return PLATFORM_KEY_H;
+        } break;
+        case XK_j: {
+            return PLATFORM_KEY_J;
+        } break;
+        case XK_k: {
+            return PLATFORM_KEY_K;
+        } break;
+        case XK_l: {
+            return PLATFORM_KEY_L;
+        } break;
         default: return PLATFORM_KEY_NONE;
     }
     return PLATFORM_KEY_NONE;
+}
+
+// Modifier keys held as of a key event, from its state mask
+u32 platform_modifiers_from_xlib_state(u32 state) {
+    u32 modifiers = PLATFORM_MODIFIER_NONE;
+    if(state & ShiftMask)   modifiers |= PLATFORM_MODIFIER_SHIFT;
+    if(state & ControlMask) modifiers |= PLATFORM_MODIFIER_CTRL;
+    if(state & Mod1Mask)    modifiers |= PLATFORM_MODIFIER_ALT;
+    return modifiers;
 }
 
 i32 main(i32 argc, char** argv) {
@@ -787,6 +853,9 @@ i32 main(i32 argc, char** argv) {
 
     dynamic_library_init(&context->game.library, string_const(GAME_LIB_NAME));
     game_library_update(&context->game);
+    if(context->game.init == NULL) {
+        log_exit("Couldn't load the game library %s. It is found relative to the working directory.", GAME_LIB_NAME);
+    }
     RenderSetup* render_setup = (RenderSetup*)stack_alloc_zero(&render_stack, sizeof(RenderSetup));
     log_print(LOG_ASSET, "Asset pack: %" PRIu64 " bytes", (u64)ASSET_PACK_SIZE);
     context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
@@ -801,6 +870,8 @@ i32 main(i32 argc, char** argv) {
 
         // Poll Xlib events
         profile_begin(PROFILE_PLATFORM_EVENTS);
+        // Set by an auto-repeat's release, which is always directly followed by its press
+        bool next_key_press_repeats = false;
         while(XPending(context->display)) {
             XEvent event;
             XNextEvent(context->display, &event);
@@ -871,26 +942,42 @@ i32 main(i32 argc, char** argv) {
                     if(key == PLATFORM_KEY_NONE) {
                         log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: keysym 0x%x", keysym);
                     }
-                    platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYDOWN, .key = key });
+                    u32 modifiers = platform_modifiers_from_xlib_state(event.xkey.state);
+                    platform_push_event(&context->platform, (PlatformEvent){
+                        .type = next_key_press_repeats ? PLATFORM_EVENT_KEYREPEAT : PLATFORM_EVENT_KEYDOWN,
+                        .modifiers = modifiers, .key = key });
+                    next_key_press_repeats = false;
+
+                    // Text input. XLookupString yields Latin-1, whose bytes are code points.
+                    // TODO: UTF-8 input through an input method (XIM and Xutf8LookupString)
+                    char text[8];
+                    i32 text_len = XLookupString(&(event.xkey), text, sizeof(text), NULL, NULL);
+                    for(i32 i = 0; i < text_len; i++) {
+                        platform_push_event(&context->platform, (PlatformEvent){
+                            .type = PLATFORM_EVENT_CHAR, .modifiers = modifiers, .codepoint = (u8)text[i] });
+                    }
                 } break;
                 case KeyRelease: {
-                    // X11 natively repeats key events when the key is held down. We could turn
-                    // that off, but it turns it off globally for the user's X11 session, which
-                    // is unacceptable of course. Here we are ignoring them manually.
+                    // X11 auto-repeats a held key as release and press pairs with the same
+                    // time. Turning that off would turn it off for the user's whole X11
+                    // session, so instead the pair is detected here: the release is dropped
+                    // and the press is reported as a repeat.
                     bool is_repeat_key = false;
                     if (XPending(context->display)) {
                         XEvent next_event;
                         XPeekEvent(context->display, &next_event);
                         if (next_event.type == KeyPress && next_event.xkey.time == event.xkey.time 
                         && next_event.xkey.keycode == event.xkey.keycode) {
-                            XNextEvent(context->display, &next_event);
                             is_repeat_key = true;
                         }
                     }
-                    if(!is_repeat_key) {
+                    if(is_repeat_key) {
+                        next_key_press_repeats = true;
+                    } else {
                         u64 keysym = XLookupKeysym(&(event.xkey), 0);
                         PlatformKey key = platform_key_from_xlib_keysym(keysym);
-                        platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYUP, .key = key });
+                        platform_push_event(&context->platform, (PlatformEvent){
+                            .type = PLATFORM_EVENT_KEYUP, .modifiers = platform_modifiers_from_xlib_state(event.xkey.state), .key = key });
                     }
                 } break;
                 default: break;

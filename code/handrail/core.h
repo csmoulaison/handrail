@@ -50,6 +50,15 @@ typedef size_t   usize;
 #define PLATFORM PLATFORM_WEB
 #endif
 
+// Generic min and max for any mix of number types. windows.h defines the same
+// macros, so these only fill in where it doesn't. Arguments may be evaluated twice.
+#ifndef min
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+
 #define KILOBYTE 1000
 #define MEGABYTE 1000000
 #define GIGABYTE 1000000000

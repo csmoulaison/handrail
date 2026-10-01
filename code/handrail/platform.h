@@ -25,6 +25,12 @@ typedef enum {
     PLATFORM_KEY_DOWN,
     PLATFORM_KEY_RIGHT,
     PLATFORM_KEY_F3,
+    PLATFORM_KEY_BACKSPACE,
+    PLATFORM_KEY_DELETE,
+    PLATFORM_KEY_H,
+    PLATFORM_KEY_J,
+    PLATFORM_KEY_K,
+    PLATFORM_KEY_L,
 } PlatformKey;
 
 typedef enum {
@@ -41,12 +47,30 @@ typedef enum {
     PLATFORM_EVENT_MOUSE_DOWN,
     PLATFORM_EVENT_MOUSE_UP,
     PLATFORM_EVENT_MOUSE_SCROLL,
+    // A held key's OS auto-repeat. Kept apart from KEYDOWN so games that act
+    // on presses don't have to filter repeats.
+    PLATFORM_EVENT_KEYREPEAT,
+    // Text input, after keyboard layout and modifiers are applied. Control
+    // characters are sent too, e.g. 0x13 for ctrl+s.
+    PLATFORM_EVENT_CHAR,
 } PlatformEventType;
+
+// Bit flags for modifier keys
+typedef enum {
+    PLATFORM_MODIFIER_NONE  = 0,
+    PLATFORM_MODIFIER_SHIFT = 1 << 0,
+    PLATFORM_MODIFIER_CTRL  = 1 << 1,
+    PLATFORM_MODIFIER_ALT   = 1 << 2,
+} PlatformModifier;
 
 typedef struct {
     PlatformEventType type;
+    // PlatformModifier flags held when a key or char event happened
+    u32               modifiers;
     union {
         PlatformKey key;
+        // Unicode code point
+        u32         codepoint;
         // Position is in window pixels, origin bottom left
         struct {
             PlatformMouseButton button;

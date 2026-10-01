@@ -11,6 +11,27 @@ typedef enum {
     FILE_OPEN_READ_WRITE
 } FileOpenMode;
 
+// A directory open for reading its entries one at a time
+typedef struct {
+#if PLATFORM == PLATFORM_LINUX
+    DIR*             handle;
+#elif PLATFORM == PLATFORM_WINDOWS
+    HANDLE           handle;
+    WIN32_FIND_DATAA data;
+    // Opening reads the first entry, so it's held until the first read
+    bool             pending;
+#elif PLATFORM == PLATFORM_WEB
+    // TODO: Web implementation
+    u8               unused;
+#endif
+} FileDirectory;
+
+typedef struct {
+    // View of the entry's name, valid until the next read
+    String name;
+    bool   is_directory;
+} FileDirectoryEntry;
+
 File file_open(String fname, FileOpenMode mode);
 bool file_try_open(String fname, FileOpenMode mode, File* out);
 void file_close(File* file);
@@ -22,6 +43,12 @@ u64 file_path_last_modified(String path);
 u64 file_path_size(String path);
 String* file_names_in_directory(String path, i32* out_path_count, Stack* stack);
 String* file_paths_in_directory(String path, i32* out_path_count, Stack* stack);
+// Open a directory to read its entries. Fails if it can't be opened.
+bool file_directory_try_open(String path, FileDirectory* out_directory);
+// Read the next entry, skipping . and .. Fails once there are none left.
+bool file_directory_try_read(FileDirectory* directory, FileDirectoryEntry* out_entry);
+// Close a directory opened with file_directory_try_open.
+void file_directory_close(FileDirectory* directory);
 
 void file_write(File* file, void* data, u64 size);
 void file_write_char(File* file, char c);
@@ -420,6 +447,63 @@ char file_peek_char(File* file) {
 void file_peek_string_token(File* file, String* dst, char delimiter) {
     u64 len = file_read_string_token(file, dst, delimiter);
     file_seek(file, -len);
+}
+
+bool file_directory_try_open(String path, FileDirectory* out_directory) {
+#if PLATFORM == PLATFORM_LINUX
+    String cpath = string_init(alloca(path.len + 1), path.len + 1);
+    string_cat(&cpath, path);
+    string_write_null_terminator(&cpath);
+    out_directory->handle = opendir(cpath.text);
+    return out_directory->handle != NULL;
+#elif PLATFORM == PLATFORM_WINDOWS
+    // Find everything in the directory with a wildcard
+    String pattern = string_init(alloca(path.len + 3), path.len + 3);
+    string_cat(&pattern, path);
+    string_cat(&pattern, string_const("\\*"));
+    string_write_null_terminator(&pattern);
+    out_directory->handle  = FindFirstFileA(pattern.text, &out_directory->data);
+    out_directory->pending = out_directory->handle != INVALID_HANDLE_VALUE;
+    return out_directory->pending;
+#elif PLATFORM == PLATFORM_WEB
+    // TODO: Web implementation
+    return false;
+#endif
+}
+
+bool file_directory_try_read(FileDirectory* directory, FileDirectoryEntry* out_entry) {
+    while(true) {
+        char* name = NULL;
+#if PLATFORM == PLATFORM_LINUX
+        struct dirent* entity = readdir(directory->handle);
+        if(entity == NULL) return false;
+        name = entity->d_name;
+        // d_type isn't POSIX and some file systems leave it unknown, so stat the entry
+        struct stat entry_stat;
+        out_entry->is_directory = fstatat(dirfd(directory->handle), name, &entry_stat, 0) == 0 && S_ISDIR(entry_stat.st_mode);
+#elif PLATFORM == PLATFORM_WINDOWS
+        if(!directory->pending && !FindNextFileA(directory->handle, &directory->data)) return false;
+        directory->pending = false;
+        name = directory->data.cFileName;
+        out_entry->is_directory = (directory->data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#elif PLATFORM == PLATFORM_WEB
+        // TODO: Web implementation
+        return false;
+#endif
+        if(strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+        out_entry->name = string_const(name);
+        return true;
+    }
+}
+
+void file_directory_close(FileDirectory* directory) {
+#if PLATFORM == PLATFORM_LINUX
+    closedir(directory->handle);
+#elif PLATFORM == PLATFORM_WINDOWS
+    FindClose(directory->handle);
+#elif PLATFORM == PLATFORM_WEB
+    // TODO: Web implementation
+#endif
 }
 
 #endif
