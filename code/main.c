@@ -534,6 +534,23 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     while(context->close_requested == false) {
         profile_begin(PROFILE_FRAME);
 
+        // A minimized window has no area to render to, so only keep audio going
+        bool minimized = context->platform.window_size.x == 0 || context->platform.window_size.y == 0;
+        if(minimized != was_minimized) {
+            log_print(LOG_PLATFORM, minimized ? "Window minimized" : "Window restored");
+            was_minimized = minimized;
+        }
+
+        // Wait for a free frame and swapchain image before pumping messages, so the
+        // game sees input from after the wait rather than before it. A resize or
+        // minimize seen in this frame's messages takes effect next frame.
+        RenderFrame render_frame;
+        if(!minimized) {
+            profile_begin(PROFILE_RENDER_BEGIN);
+            vk_frame_begin(vk, context->platform.window_size, &render_frame);
+            profile_end(PROFILE_RENDER_BEGIN);
+        }
+
         // Pump Win32 messages, which window_proc turns into platform state and events
         profile_begin(PROFILE_PLATFORM_EVENTS);
         MSG message;
@@ -546,19 +563,8 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
             break;
         }
 
-        // A minimized window has no area to render to, so only keep audio going
-        bool minimized = context->platform.window_size.x == 0 || context->platform.window_size.y == 0;
-        if(minimized != was_minimized) {
-            log_print(LOG_PLATFORM, minimized ? "Window minimized" : "Window restored");
-            was_minimized = minimized;
-        }
-
         // Update game, which writes the frame straight into GPU memory
-        RenderFrame render_frame;
         if(!minimized) {
-            profile_begin(PROFILE_RENDER_BEGIN);
-            vk_frame_begin(vk, context->platform.window_size, &render_frame);
-            profile_end(PROFILE_RENDER_BEGIN);
             profile_begin(PROFILE_GAME_UPDATE);
             context->game.update(game_stack.memory, asset_pack_data, &render_frame, &context->platform);
             profile_end(PROFILE_GAME_UPDATE);
