@@ -1,1 +1,4 @@
 .vs/
+extern/freetype/out/
+extern/freetype/objs/*
+!extern/freetype/objs/README

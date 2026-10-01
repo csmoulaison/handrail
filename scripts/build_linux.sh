@@ -46,9 +46,32 @@ prebuild() {
     end_step
 }
 
+# Prebuild rasterizes fonts with the vendored FreeType. Build it once into
+# handrail/extern/freetype/out, static and without optional dependencies.
+FREETYPE_DIR="handrail/extern/freetype"
+FREETYPE_OUT="$FREETYPE_DIR/out"
+
+freetype() {
+    if [[ -f "$FREETYPE_OUT/lib/libfreetype.a" ]]; then
+        return
+    fi
+    start_step "FreeType"
+    cmake -S $FREETYPE_DIR -B build/freetype \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_INSTALL_PREFIX="$PWD/$FREETYPE_OUT" -DCMAKE_INSTALL_LIBDIR=lib \
+        -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_PNG=TRUE \
+        -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE > build/freetype.log \
+    && cmake --build build/freetype --parallel >> build/freetype.log \
+    && cmake --install build/freetype >> build/freetype.log
+    end_step
+}
+
 bootstrap() {
+    freetype
+
     start_step "Bootstrap"
-    gcc code/prebuild.c -o build/build $INCLUDE -g -rdynamic -Wall -Werror -Wno-unused -lm
+    gcc code/prebuild.c -o build/build $INCLUDE -I $FREETYPE_OUT/include/freetype2 -g -rdynamic -Wall -Werror -Wno-unused \
+        $FREETYPE_OUT/lib/libfreetype.a -lm
     end_step
 }
 

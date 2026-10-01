@@ -46,9 +46,34 @@ function Prebuild {
     End-Step
 }
 
+# Prebuild rasterizes fonts with the vendored FreeType. Build it once into
+# handrail\extern\freetype\out, static (with the static CRT, matching cl's
+# default /MT) and without optional dependencies.
+$FREETYPE_DIR = "handrail\extern\freetype"
+$FREETYPE_OUT = "$FREETYPE_DIR\out"
+
+function FreeType {
+    if(Test-Path -Path "$FREETYPE_OUT\lib\freetype.lib") {
+        return
+    }
+    Start-Step "FreeType"
+    cmake -S $FREETYPE_DIR -B build\freetype `
+        -DBUILD_SHARED_LIBS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+        "-DCMAKE_INSTALL_PREFIX=$PWD\$FREETYPE_OUT" -DCMAKE_INSTALL_LIBDIR=lib `
+        -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_PNG=TRUE `
+        -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE > build\freetype.log
+    Error-On-Exit
+    cmake --build build\freetype --config Release --parallel >> build\freetype.log
+    Error-On-Exit
+    cmake --install build\freetype --config Release >> build\freetype.log
+    End-Step
+}
+
 function Bootstrap {
+    FreeType
+
     Start-Step "Bootstrap"
-    cl code\prebuild.c $INCLUDE $FLAGS /Fe:build\prebuild.exe /Fo:build\ /nologo
+    cl code\prebuild.c $INCLUDE "/I$FREETYPE_OUT\include\freetype2" $FLAGS /Fe:build\prebuild.exe /Fo:build\ /nologo /link "$FREETYPE_OUT\lib\freetype.lib"
     End-Step
 }
 
