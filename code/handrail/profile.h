@@ -26,6 +26,7 @@
 #define PROFILE_GAME_UPDATE     (1ull << 3)
 #define PROFILE_AUDIO           (1ull << 4)
 #define PROFILE_RENDER_END      (1ull << 5)
+#define PROFILE_GPU             (1ull << 6)
 
 #define PROFILE_ENGINE_TIMERS_LEN 32
 #define PROFILE_TIMERS_LEN        64
@@ -41,7 +42,7 @@
 
 // Frames of per-timer history kept for averages, maxima, and graphs
 #ifndef PROFILE_HISTORY_LEN
-#define PROFILE_HISTORY_LEN 128
+#define PROFILE_HISTORY_LEN 512
 #endif
 
 #ifndef PROFILE_NAME_MAX
@@ -60,6 +61,7 @@ typedef struct {
     // Over the history ring
     u64  average_ns;
     u64  max_ns;
+    u64  history_sum;
     // Per-frame totals. The oldest entry is at Profile.history_index.
     u64  history[PROFILE_HISTORY_LEN];
     char name[PROFILE_NAME_MAX];
@@ -75,6 +77,9 @@ typedef struct {
 // Start or stop a timer. Compiled out if the timer is not in PROFILE_MASK.
 #define profile_begin(timer) do { if(((timer) & (PROFILE_MASK)) != 0) profile_timer_begin(timer); } while(0)
 #define profile_end(timer)   do { if(((timer) & (PROFILE_MASK)) != 0) profile_timer_end(timer); } while(0)
+// Add a duration measured some other way (e.g. GPU timestamps) to a timer's
+// current frame, as one call. Compiled out if the timer is not in PROFILE_MASK.
+#define profile_add(timer, ns) do { if(((timer) & (PROFILE_MASK)) != 0) profile_record((timer), (ns)); } while(0)
 
 // Monotonic high-resolution clock, in nanoseconds. Works whether or not profiling is enabled.
 u64           profile_time_ns(void);
@@ -91,9 +96,10 @@ void          profile_frame_end(void);
 ProfileTimer* profile_get(u64 timer);
 // Log name, last, average, and max time, and calls, for every enabled timer that has run.
 void          profile_log(u64 log_layer);
-// Use profile_begin and profile_end rather than calling these directly.
+// Use profile_begin, profile_end, and profile_add rather than calling these directly.
 void          profile_timer_begin(u64 timer);
 void          profile_timer_end(u64 timer);
+void          profile_record(u64 timer, u64 ns);
 
 #endif
 
@@ -107,7 +113,7 @@ void          profile_timer_end(u64 timer);
 static Profile* profile_global = NULL;
 
 static char* profile_engine_timer_names[PROFILE_ENGINE_TIMERS_LEN] = {
-    "frame", "platform_events", "render_begin", "game_update", "audio", "render_end",
+    "frame", "platform_events", "render_begin", "game_update", "audio", "render_end", "gpu",
 };
 
 static i32 profile_timer_index(u64 timer) {
@@ -177,24 +183,34 @@ void profile_frame_end(void) {
             panic();
         }
 
-        // Record the frame
+        // A timer that hasn't run this frame or in the history has nothing to update
+        if(timer->accum_calls == 0 && timer->history_sum == 0 && timer->last_calls == 0) {
+            continue;
+        }
+
+        // Record the frame, replacing the oldest entry in the ring
+        u64 evicted = timer->history[profile->history_index];
         timer->last_ns = timer->accum_ns;
         timer->last_calls = timer->accum_calls;
         timer->history[profile->history_index] = timer->accum_ns;
         timer->accum_ns = 0;
         timer->accum_calls = 0;
 
-        // Average and max over the filled part of the ring
-        u64 sum = 0;
-        u64 max = 0;
-        for(u64 j = 0; j < history_len; j++) {
-            sum += timer->history[j];
-            if(timer->history[j] > max) {
-                max = timer->history[j];
+        // Average and max over the filled part of the ring. The max only needs
+        // a rescan when the entry that held it was evicted.
+        timer->history_sum = timer->history_sum - evicted + timer->last_ns;
+        timer->average_ns = timer->history_sum / history_len;
+        if(timer->last_ns >= timer->max_ns) {
+            timer->max_ns = timer->last_ns;
+        } else if(evicted == timer->max_ns) {
+            u64 max = 0;
+            for(i32 j = 0; j < PROFILE_HISTORY_LEN; j++) {
+                if(timer->history[j] > max) {
+                    max = timer->history[j];
+                }
             }
+            timer->max_ns = max;
         }
-        timer->average_ns = sum / history_len;
-        timer->max_ns = max;
     }
     profile->history_index = (profile->history_index + 1) % PROFILE_HISTORY_LEN;
     profile->frame_count++;
@@ -238,6 +254,13 @@ void profile_timer_end(u64 timer) {
     assert(profile_timer->running);
     profile_timer->running = false;
     profile_timer->accum_ns += end_ns - profile_timer->start_ns;
+    profile_timer->accum_calls++;
+}
+
+void profile_record(u64 timer, u64 ns) {
+    if(profile_global == NULL) return;
+    ProfileTimer* profile_timer = &profile_global->timers[profile_timer_index(timer)];
+    profile_timer->accum_ns += ns;
     profile_timer->accum_calls++;
 }
 

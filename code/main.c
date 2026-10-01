@@ -156,6 +156,9 @@ PlatformKey platform_key_from_win32_virtual_key(WPARAM virtual_key) {
         case VK_RETURN: {
             return PLATFORM_KEY_ENTER;
         } break;
+        case VK_F1: {
+            return PLATFORM_KEY_F1;
+        } break;
         default: return PLATFORM_KEY_NONE;
     }
     return PLATFORM_KEY_NONE;
@@ -626,6 +629,9 @@ PlatformKey platform_key_from_xlib_keysym(u32 keysym) {
         } break;
         case XK_Return: {
             return PLATFORM_KEY_ENTER;
+        } break;
+        case XK_F1: {
+            return PLATFORM_KEY_F1;
         } break;
         default: return PLATFORM_KEY_NONE;
     }

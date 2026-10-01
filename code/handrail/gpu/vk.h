@@ -65,6 +65,8 @@ typedef struct {
     VkFence         fence;
     VkSemaphore     image_acquired;
     u64             memory_offset; // Into host_arena
+    // Set once this frame's command buffer has written its GPU timestamps
+    bool            timestamps_written;
 } VkFrame;
 
 typedef struct {
@@ -94,6 +96,12 @@ typedef struct {
     VkFrame                  frames[VK_FRAMES_IN_FLIGHT];
     u32                      frame_index;
     u32                      image_index;
+
+    // GPU frame timing: two timestamps per frame in flight, reported as PROFILE_GPU.
+    // timestamp_query_pool is VK_NULL_HANDLE if the queue can't write timestamps.
+    VkQueryPool              timestamp_query_pool;
+    f32                      timestamp_period;    // Nanoseconds per tick
+    u64                      timestamp_mask;      // Valid bits of a timestamp
 
     // GPU memory
     VkArena                  host_arena;   // Per-frame memory, mapped
@@ -571,6 +579,25 @@ void vk_init(VkContext* vk, String app_name, VkPlatformWindow window, iv2 window
     pool_info.queueFamilyIndex = vk->queue_family;
     VK_VERIFY(vkCreateCommandPool(vk->device, &pool_info, NULL, &vk->command_pool));
 
+    // GPU timestamps, if the queue family supports them
+    u32 families_len = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(vk->physical_device, &families_len, NULL);
+    VkQueueFamilyProperties* families = (VkQueueFamilyProperties*)stack_alloc(scratch, families_len * sizeof(VkQueueFamilyProperties));
+    vkGetPhysicalDeviceQueueFamilyProperties(vk->physical_device, &families_len, families);
+    u32 timestamp_bits = families[vk->queue_family].timestampValidBits;
+    if(timestamp_bits == 0 || device_properties.limits.timestampPeriod == 0.0f) {
+        log_print(LOG_RENDER, "Vulkan: queue family %u can't write timestamps, GPU frame time is off", vk->queue_family);
+    } else {
+        vk->timestamp_period = device_properties.limits.timestampPeriod;
+        vk->timestamp_mask = timestamp_bits >= 64 ? ~0ull : (1ull << timestamp_bits) - 1;
+        VkQueryPoolCreateInfo query_pool_info = {};
+        query_pool_info.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        query_pool_info.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        query_pool_info.queryCount = 2 * VK_FRAMES_IN_FLIGHT;
+        VK_VERIFY(vkCreateQueryPool(vk->device, &query_pool_info, NULL, &vk->timestamp_query_pool));
+        log_print(LOG_RENDER, "Vulkan: GPU timestamps, %u valid bits, %.3f ns per tick", timestamp_bits, vk->timestamp_period);
+    }
+
     // Per-frame memory: prefer device-local host-visible memory (resizable BAR),
     // so the GPU reads the game's writes without going over the bus each draw.
     VkMemoryPropertyFlags host_flags[2] = {
@@ -934,6 +961,16 @@ void vk_frame_begin(VkContext* vk, iv2 window_size, bool window_resized, RenderF
     VkFrame* frame = &vk->frames[vk->frame_index];
     VK_VERIFY(vkWaitForFences(vk->device, 1, &frame->fence, VK_TRUE, UINT64_MAX));
 
+    // The fence has signaled, so this frame's timestamps from its last use are ready
+    if(frame->timestamps_written) {
+        u64 timestamps[2];
+        VK_VERIFY(vkGetQueryPoolResults(vk->device, vk->timestamp_query_pool, 2 * vk->frame_index, 2,
+                                        sizeof(timestamps), timestamps, sizeof(u64), VK_QUERY_RESULT_64_BIT));
+        u64 ticks = ((timestamps[1] & vk->timestamp_mask) - (timestamps[0] & vk->timestamp_mask)) & vk->timestamp_mask;
+        profile_add(PROFILE_GPU, (u64)((f64)ticks * (f64)vk->timestamp_period));
+        frame->timestamps_written = false;
+    }
+
     // Acquire a swapchain image, recreating the swapchain when it no longer fits the window
     if(window_resized || vk->swapchain_stale) {
         vk_swapchain_create(vk, window_size, window_resized ? "window resized" : "stale");
@@ -972,6 +1009,9 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_VERIFY(vkBeginCommandBuffer(command_buffer, &begin_info));
+    if(vk->timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(command_buffer, vk->timestamp_query_pool, 2 * vk->frame_index, 2);
+    }
 
     // Begin rendering
     vk_image_barrier(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -981,6 +1021,11 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
         VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    // Start the GPU timer after the barriers, which wait for the acquired image,
+    // so the time measures rendering rather than waiting on the swapchain
+    if(vk->timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(command_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, vk->timestamp_query_pool, 2 * vk->frame_index);
+    }
 
     v4 clear = render_frame->clear_color;
     VkRenderingAttachmentInfo color_attachment = {};
@@ -1041,6 +1086,10 @@ void vk_frame_end(VkContext* vk, RenderFrame* render_frame) {
     vk_image_barrier(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+    if(vk->timestamp_query_pool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp2(command_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, vk->timestamp_query_pool, 2 * vk->frame_index + 1);
+        frame->timestamps_written = true;
+    }
     VK_VERIFY(vkEndCommandBuffer(command_buffer));
 
     // Submit

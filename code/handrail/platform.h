@@ -24,6 +24,7 @@ typedef enum {
     PLATFORM_KEY_LEFT,
     PLATFORM_KEY_DOWN,
     PLATFORM_KEY_RIGHT,
+    PLATFORM_KEY_F1,
 } PlatformKey;
 
 typedef enum {
