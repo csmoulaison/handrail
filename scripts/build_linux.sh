@@ -41,12 +41,13 @@ prebuild() {
     start_step "Prebuild"
     if [[ -f "build/build" ]]; then
         ./build/build
-        if [[ $? -ne 0 ]]; then error_on_exit; fi
+        error_on_exit
     fi
     end_step
 }
 
-# Prebuild rasterizes fonts with the vendored FreeType. Build it once into
+# Prebuild processes fonts with the vendored FreeType, but only when
+# code/prebuild.c defines HANDRAIL_FONT_PROCESSING. Build it once into
 # handrail/extern/freetype/out, static and without optional dependencies.
 FREETYPE_DIR="handrail/extern/freetype"
 FREETYPE_OUT="$FREETYPE_DIR/out"
@@ -67,11 +68,15 @@ freetype() {
 }
 
 bootstrap() {
-    freetype
+    FREETYPE_FLAGS=""
+    if grep -q "^#define HANDRAIL_FONT_PROCESSING" code/prebuild.c; then
+        freetype
+        FREETYPE_FLAGS="-I $FREETYPE_OUT/include/freetype2 $FREETYPE_OUT/lib/libfreetype.a"
+    fi
 
     start_step "Bootstrap"
-    gcc code/prebuild.c -o build/build $INCLUDE -I $FREETYPE_OUT/include/freetype2 -g -rdynamic -Wall -Werror -Wno-unused \
-        $FREETYPE_OUT/lib/libfreetype.a -lm
+    gcc code/prebuild.c -o build/build $INCLUDE -g -rdynamic -Wall -Werror -Wno-unused \
+        $FREETYPE_FLAGS -lm
     end_step
 }
 

@@ -39,14 +39,13 @@ function Prebuild {
     Start-Step "Prebuild"
     if(Test-Path -Path "build\prebuild.exe") {
         build\prebuild
-        if(!$?) {
-            Error-On-Exit
-        }
+        Error-On-Exit
     }
     End-Step
 }
 
-# Prebuild rasterizes fonts with the vendored FreeType. Build it once into
+# Prebuild processes fonts with the vendored FreeType, but only when
+# code\prebuild.c defines HANDRAIL_FONT_PROCESSING. Build it once into
 # handrail\extern\freetype\out, static (with the static CRT, matching cl's
 # default /MT) and without optional dependencies.
 $FREETYPE_DIR = "handrail\extern\freetype"
@@ -70,10 +69,16 @@ function FreeType {
 }
 
 function Bootstrap {
-    FreeType
+    $FREETYPE_INCLUDE = @()
+    $FREETYPE_LIB     = @()
+    if(Select-String -Path code\prebuild.c -Pattern "^#define HANDRAIL_FONT_PROCESSING" -Quiet) {
+        FreeType
+        $FREETYPE_INCLUDE = "/I$FREETYPE_OUT\include\freetype2"
+        $FREETYPE_LIB     = "$FREETYPE_OUT\lib\freetype.lib"
+    }
 
     Start-Step "Bootstrap"
-    cl code\prebuild.c $INCLUDE "/I$FREETYPE_OUT\include\freetype2" $FLAGS /Fe:build\prebuild.exe /Fo:build\ /nologo /link "$FREETYPE_OUT\lib\freetype.lib"
+    cl code\prebuild.c $INCLUDE $FREETYPE_INCLUDE $FLAGS /Fe:build\prebuild.exe /Fo:build\ /nologo /link $FREETYPE_LIB
     End-Step
 }
 
@@ -82,10 +87,10 @@ function Static {
 
     Start-Step "Static (build)"
     cl handrail\code\main.c build\asset\pack.obj `
-        /Fe:bin\game.exe /Fo:build\ /Fd:bin\ `
+        /Fe:bin\$EXE.exe /Fo:build\ /Fd:bin\ `
         $INCLUDE `
         $FLAGS `
-        /D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.dll\"' `
+        /D"GAME_NAME=\`"$EXE\`"" /D"GAME_LIB_NAME=\`"$EXE.dll\`"" `
         /nologo `
         /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib avrt.lib onecore.lib xinput.lib
     End-Step
@@ -94,7 +99,7 @@ function Static {
 function Dynamic {
     # A unique PDB name per build, so a debugger holding the last one open
     # doesn't block rebuilding the library for hot reload
-    $PDB_NAME = "game_$(Get-Date -Format 'yyyyMMddHHmmssfff').pdb"
+    $PDB_NAME = "${EXE}_$(Get-Date -Format 'yyyyMMddHHmmssfff').pdb"
 
     Start-Step "Game library (final)"
     cl code\game.c `
@@ -102,10 +107,10 @@ function Dynamic {
         /nologo `
         $INCLUDE `
         $FLAGS /LD /link /EXPORT:game_init /EXPORT:game_update /EXPORT:game_audio_callback `
-        /OUT:bin\game_tmp.dll /IMPLIB:build\game.lib /PDB:bin\$PDB_NAME
+        /OUT:bin\${EXE}_tmp.dll /IMPLIB:build\$EXE.lib /PDB:bin\$PDB_NAME
     End-Step
 
-    Move-Item -Path bin\game_tmp.dll -Destination bin\game.dll -Force
+    Move-Item -Path bin\${EXE}_tmp.dll -Destination bin\$EXE.dll -Force
 }
 
 switch($TARGET) {

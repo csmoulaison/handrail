@@ -1,0 +1,5 @@
+bin/*
+build/*
+.vs
+vc140.pdb
+log.txt
