@@ -88,6 +88,7 @@ typedef struct Stack  Stack;
 
 #include "handrail/coff.h"
 #include "handrail/platform.h"
+#include "handrail/input.h"
 #include "handrail/fiedler.h"
 #include "handrail/dynamic_library.h"
 
@@ -130,6 +131,7 @@ typedef struct Stack  Stack;
 
 #include "handrail/coff.h"
 #include "handrail/platform.h"
+#include "handrail/input.h"
 #include "handrail/fiedler.h"
 #include "handrail/dynamic_library.h"
 
