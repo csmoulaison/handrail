@@ -38,10 +38,6 @@ Stack stack_init(Buffer buffer, String label) {
     stack.buffer = buffer;
     stack.head = 0;
     stack.high_water = 0;
-
-#if BUFFER_DEBUG
-    stack.buffer.label = label;
-#endif
     log_print(LOG_MEMORY, STRING_FMT ": Stack initialized. %" PRIu64 " bytes",
               STRING_ARG(label), buffer.size);
     return stack;

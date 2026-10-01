@@ -3,7 +3,6 @@
 
 #define HANDRAIL_IMPLEMENTATION
 #define HANDRAIL_INCLUDE_VK
-#define BUFFER_DEBUG true
 #include "handrail/core.h"
 
 #include "generated/asset_data.c"
@@ -95,13 +94,14 @@ typedef struct {
 } Wasapi;
 
 typedef struct {
-    bool        close_requested;
-    Log         log;
-    Profile     profile;
-    HWND        hwnd;
-    Platform    platform;
-    GameLibrary game;
-    Wasapi      audio;
+    bool          close_requested;
+    Log           log;
+    Profile       profile;
+    BufferTracker buffers;
+    HWND          hwnd;
+    Platform      platform;
+    GameLibrary   game;
+    Wasapi        audio;
 } Context;
 
 PlatformKey platform_key_from_win32_virtual_key(WPARAM virtual_key) {
@@ -317,7 +317,15 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     void* mem = VirtualAlloc(NULL, ROOT_MEMORY_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     assert(mem != NULL);
     Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
-    Context* context = (Context*)stack_alloc_zero(&root_stack, sizeof(Context));
+    Buffer context_buffer = stack_alloc_labeled(&root_stack, sizeof(Context), string_const("Context"));
+    Context* context = (Context*)context_buffer.memory;
+    memset(context, 0, sizeof(Context));
+
+    // Track buffers from here on, including the two made before the tracker existed
+    buffer_tracker_bind(&context->buffers);
+    buffer_track(root_stack.buffer, string_const("Root"), BUFFER_TYPE_RAW | BUFFER_TYPE_STACK);
+    buffer_track(context_buffer, string_const("Context"), BUFFER_TYPE_SUB);
+    context->platform.buffers = &context->buffers;
     Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
     Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
     Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));
@@ -601,6 +609,7 @@ typedef struct {
     bool                close_requested;
     Log                 log;
     Profile             profile;
+    BufferTracker       buffers;
 
     Display*            display;
     Window              window;
@@ -675,8 +684,15 @@ i32 main(i32 argc, char** argv) {
     // Allocate memory
     void* mem = malloc(ROOT_MEMORY_SIZE);
     Stack root_stack = stack_from_memory(mem, ROOT_MEMORY_SIZE, string_const("Root"));
-    Context* context = (Context*)stack_alloc(&root_stack, sizeof(Context));
+    Buffer context_buffer = stack_alloc_labeled(&root_stack, sizeof(Context), string_const("Context"));
+    Context* context = (Context*)context_buffer.memory;
     memset(context, 0, sizeof(Context));
+
+    // Track buffers from here on, including the two made before the tracker existed
+    buffer_tracker_bind(&context->buffers);
+    buffer_track(root_stack.buffer, string_const("Root"), BUFFER_TYPE_RAW | BUFFER_TYPE_STACK);
+    buffer_track(context_buffer, string_const("Context"), BUFFER_TYPE_SUB);
+    context->platform.buffers = &context->buffers;
     Stack game_stack           = stack_from_stack(&root_stack, GAME_STACK_SIZE, string_const("Game"));
     Stack render_stack         = stack_from_stack(&root_stack, RENDER_STACK_SIZE, string_const("Renderer"));
     Stack platform_frame_stack = stack_from_stack(&root_stack, PLATFORM_FRAME_STACK_SIZE, string_const("PlatformFrame"));

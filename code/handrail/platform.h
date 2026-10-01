@@ -55,15 +55,17 @@ typedef struct {
 } PlatformEvent;
 
 typedef struct {
-    Log*          log;
-    Profile*      profile;
+    Log*           log;
+    Profile*       profile;
+    // Every tracked buffer, for debug views
+    BufferTracker* buffers;
     // Scratch memory for the game, cleared after every frame
-    Stack*        frame_stack;
-    iv2           window_size;
+    Stack*         frame_stack;
+    iv2            window_size;
     // In window pixels, origin bottom left. Outside the window while a drag is captured.
-    iv2           mouse_position;
-    PlatformEvent events[PLATFORM_MAX_EVENTS_PER_FRAME];
-    i32           events_len;
+    iv2            mouse_position;
+    PlatformEvent  events[PLATFORM_MAX_EVENTS_PER_FRAME];
+    i32            events_len;
 } Platform;
 
 void platform_push_event(Platform* platform, PlatformEvent event);
