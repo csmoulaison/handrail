@@ -55,6 +55,7 @@ void game_library_update(GameLibrary* game) {
 #include <avrt.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <xinput.h>
 
 // Defined here rather than linked from uuid.lib, so their names can't collide with the SDK's
 static const GUID WASAPI_CLSID_MM_DEVICE_ENUMERATOR = { 0xbcde0395, 0xe52f, 0x467c, { 0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e } };
@@ -93,6 +94,12 @@ typedef struct {
     volatile LONG priority_failed;
 } Wasapi;
 
+// A gamepad slot's state as of the last poll, which the next poll diffs against
+typedef struct {
+    bool         connected;
+    XINPUT_STATE state;
+} XinputGamepad;
+
 typedef struct {
     bool          close_requested;
     Log           log;
@@ -102,85 +109,57 @@ typedef struct {
     Platform      platform;
     GameLibrary   game;
     Wasapi        audio;
+    XinputGamepad gamepads[PLATFORM_MAX_GAMEPADS];
+    u64           gamepad_scan_ns;
 } Context;
 
-PlatformKey platform_key_from_win32_virtual_key(WPARAM virtual_key) {
+// Left and right modifiers share a virtual key. The extended-key bit (24) of
+// lparam marks the right ctrl and alt, and numpad enter; the scan code in bits
+// 16-23 tells the shifts apart.
+PlatformKey platform_key_from_win32(WPARAM virtual_key, LPARAM lparam) {
+    bool extended = (lparam & (1 << 24)) != 0;
+    if(virtual_key >= 'A' && virtual_key <= 'Z') return (PlatformKey)(PLATFORM_KEY_A + (virtual_key - 'A'));
+    if(virtual_key >= '0' && virtual_key <= '9') return (PlatformKey)(PLATFORM_KEY_0 + (virtual_key - '0'));
+    if(virtual_key >= VK_F1 && virtual_key <= VK_F12) return (PlatformKey)(PLATFORM_KEY_F1 + (virtual_key - VK_F1));
+    if(virtual_key >= VK_NUMPAD0 && virtual_key <= VK_NUMPAD9) return (PlatformKey)(PLATFORM_KEY_NUMPAD_0 + (virtual_key - VK_NUMPAD0));
     switch(virtual_key) {
-        case 'W': {
-            return PLATFORM_KEY_W;
-        } break;
-        case 'A': {
-            return PLATFORM_KEY_A;
-        } break;
-        case 'S': {
-            return PLATFORM_KEY_S;
-        } break;
-        case 'D': {
-            return PLATFORM_KEY_D;
-        } break;
-        case 'Q': {
-            return PLATFORM_KEY_Q;
-        } break;
-        case 'E': {
-            return PLATFORM_KEY_E;
-        } break;
-        case 'G': {
-            return PLATFORM_KEY_G;
-        } break;
-        case 'M': {
-            return PLATFORM_KEY_M;
-        } break;
-        case 'R': {
-            return PLATFORM_KEY_R;
-        } break;
-        case VK_UP: {
-            return PLATFORM_KEY_UP;
-        } break;
-        case VK_LEFT: {
-            return PLATFORM_KEY_LEFT;
-        } break;
-        case VK_DOWN: {
-            return PLATFORM_KEY_DOWN;
-        } break;
-        case VK_RIGHT: {
-            return PLATFORM_KEY_RIGHT;
-        } break;
-        case VK_ESCAPE: {
-            return PLATFORM_KEY_ESCAPE;
-        } break;
-        case VK_TAB: {
-            return PLATFORM_KEY_TAB;
-        } break;
-        case VK_SPACE: {
-            return PLATFORM_KEY_SPACE;
-        } break;
-        case VK_RETURN: {
-            return PLATFORM_KEY_ENTER;
-        } break;
-        case VK_F3: {
-            return PLATFORM_KEY_F3;
-        } break;
-        case VK_BACK: {
-            return PLATFORM_KEY_BACKSPACE;
-        } break;
-        case VK_DELETE: {
-            return PLATFORM_KEY_DELETE;
-        } break;
-        case 'H': {
-            return PLATFORM_KEY_H;
-        } break;
-        case 'J': {
-            return PLATFORM_KEY_J;
-        } break;
-        case 'K': {
-            return PLATFORM_KEY_K;
-        } break;
-        case 'L': {
-            return PLATFORM_KEY_L;
-        } break;
-        default: return PLATFORM_KEY_NONE;
+        case VK_ESCAPE:     return PLATFORM_KEY_ESCAPE;
+        case VK_TAB:        return PLATFORM_KEY_TAB;
+        case VK_SPACE:      return PLATFORM_KEY_SPACE;
+        case VK_RETURN:     return extended ? PLATFORM_KEY_NUMPAD_ENTER : PLATFORM_KEY_ENTER;
+        case VK_BACK:       return PLATFORM_KEY_BACKSPACE;
+        case VK_DELETE:     return PLATFORM_KEY_DELETE;
+        case VK_INSERT:     return PLATFORM_KEY_INSERT;
+        case VK_HOME:       return PLATFORM_KEY_HOME;
+        case VK_END:        return PLATFORM_KEY_END;
+        case VK_PRIOR:      return PLATFORM_KEY_PAGE_UP;
+        case VK_NEXT:       return PLATFORM_KEY_PAGE_DOWN;
+        case VK_UP:         return PLATFORM_KEY_UP;
+        case VK_DOWN:       return PLATFORM_KEY_DOWN;
+        case VK_LEFT:       return PLATFORM_KEY_LEFT;
+        case VK_RIGHT:      return PLATFORM_KEY_RIGHT;
+        case VK_SHIFT:      return MapVirtualKeyA((lparam >> 16) & 0xff, MAPVK_VSC_TO_VK_EX) == VK_RSHIFT ? PLATFORM_KEY_RIGHT_SHIFT : PLATFORM_KEY_LEFT_SHIFT;
+        case VK_CONTROL:    return extended ? PLATFORM_KEY_RIGHT_CTRL : PLATFORM_KEY_LEFT_CTRL;
+        case VK_MENU:       return extended ? PLATFORM_KEY_RIGHT_ALT : PLATFORM_KEY_LEFT_ALT;
+        case VK_CAPITAL:    return PLATFORM_KEY_CAPS_LOCK;
+        case VK_OEM_3:      return PLATFORM_KEY_GRAVE;
+        case VK_OEM_MINUS:  return PLATFORM_KEY_MINUS;
+        case VK_OEM_PLUS:   return PLATFORM_KEY_EQUALS;
+        case VK_OEM_4:      return PLATFORM_KEY_LEFT_BRACKET;
+        case VK_OEM_6:      return PLATFORM_KEY_RIGHT_BRACKET;
+        case VK_OEM_5:      return PLATFORM_KEY_BACKSLASH;
+        case VK_OEM_1:      return PLATFORM_KEY_SEMICOLON;
+        case VK_OEM_7:      return PLATFORM_KEY_APOSTROPHE;
+        case VK_OEM_COMMA:  return PLATFORM_KEY_COMMA;
+        case VK_OEM_PERIOD: return PLATFORM_KEY_PERIOD;
+        case VK_OEM_2:      return PLATFORM_KEY_SLASH;
+        case VK_ADD:        return PLATFORM_KEY_NUMPAD_ADD;
+        case VK_SUBTRACT:   return PLATFORM_KEY_NUMPAD_SUBTRACT;
+        case VK_MULTIPLY:   return PLATFORM_KEY_NUMPAD_MULTIPLY;
+        case VK_DIVIDE:     return PLATFORM_KEY_NUMPAD_DIVIDE;
+        case VK_DECIMAL:    return PLATFORM_KEY_NUMPAD_DECIMAL;
+        default:            return PLATFORM_KEY_NONE;
     }
-    return PLATFORM_KEY_NONE;
 }
 
 // Modifier keys held as of the message being processed
@@ -190,6 +169,91 @@ u32 platform_modifiers_from_win32() {
     if(GetKeyState(VK_CONTROL) & 0x8000) modifiers |= PLATFORM_MODIFIER_CTRL;
     if(GetKeyState(VK_MENU)    & 0x8000) modifiers |= PLATFORM_MODIFIER_ALT;
     return modifiers;
+}
+
+// A gamepad's axes as platform values, indexed by PlatformGamepadAxis
+void xinput_axes(XINPUT_GAMEPAD* gamepad, f32* out_axes) {
+    out_axes[PLATFORM_GAMEPAD_AXIS_LEFT_X]        = f32_max((f32)gamepad->sThumbLX / 32767.0f, -1.0f);
+    out_axes[PLATFORM_GAMEPAD_AXIS_LEFT_Y]        = f32_max((f32)gamepad->sThumbLY / 32767.0f, -1.0f);
+    out_axes[PLATFORM_GAMEPAD_AXIS_RIGHT_X]       = f32_max((f32)gamepad->sThumbRX / 32767.0f, -1.0f);
+    out_axes[PLATFORM_GAMEPAD_AXIS_RIGHT_Y]       = f32_max((f32)gamepad->sThumbRY / 32767.0f, -1.0f);
+    out_axes[PLATFORM_GAMEPAD_AXIS_LEFT_TRIGGER]  = (f32)gamepad->bLeftTrigger / 255.0f;
+    out_axes[PLATFORM_GAMEPAD_AXIS_RIGHT_TRIGGER] = (f32)gamepad->bRightTrigger / 255.0f;
+}
+
+// Poll XInput and push what changed since the last poll as events. Checking an
+// empty slot is slow, so empty slots are only checked about once a second.
+void xinput_poll(Context* context) {
+    static const struct { WORD mask; PlatformGamepadButton button; } button_map[] = {
+        { XINPUT_GAMEPAD_A,              PLATFORM_GAMEPAD_BUTTON_SOUTH },
+        { XINPUT_GAMEPAD_B,              PLATFORM_GAMEPAD_BUTTON_EAST },
+        { XINPUT_GAMEPAD_X,              PLATFORM_GAMEPAD_BUTTON_WEST },
+        { XINPUT_GAMEPAD_Y,              PLATFORM_GAMEPAD_BUTTON_NORTH },
+        { XINPUT_GAMEPAD_LEFT_SHOULDER,  PLATFORM_GAMEPAD_BUTTON_LEFT_SHOULDER },
+        { XINPUT_GAMEPAD_RIGHT_SHOULDER, PLATFORM_GAMEPAD_BUTTON_RIGHT_SHOULDER },
+        { XINPUT_GAMEPAD_LEFT_THUMB,     PLATFORM_GAMEPAD_BUTTON_LEFT_STICK },
+        { XINPUT_GAMEPAD_RIGHT_THUMB,    PLATFORM_GAMEPAD_BUTTON_RIGHT_STICK },
+        { XINPUT_GAMEPAD_START,          PLATFORM_GAMEPAD_BUTTON_START },
+        { XINPUT_GAMEPAD_BACK,           PLATFORM_GAMEPAD_BUTTON_BACK },
+        { XINPUT_GAMEPAD_DPAD_UP,        PLATFORM_GAMEPAD_BUTTON_DPAD_UP },
+        { XINPUT_GAMEPAD_DPAD_DOWN,      PLATFORM_GAMEPAD_BUTTON_DPAD_DOWN },
+        { XINPUT_GAMEPAD_DPAD_LEFT,      PLATFORM_GAMEPAD_BUTTON_DPAD_LEFT },
+        { XINPUT_GAMEPAD_DPAD_RIGHT,     PLATFORM_GAMEPAD_BUTTON_DPAD_RIGHT },
+    };
+    u64 now = profile_time_ns();
+    bool scan = now - context->gamepad_scan_ns >= 1000000000ull;
+    if(scan) {
+        context->gamepad_scan_ns = now;
+    }
+    i32 slots_len = min(PLATFORM_MAX_GAMEPADS, XUSER_MAX_COUNT);
+    for(i32 i = 0; i < slots_len; i++) {
+        XinputGamepad* gamepad = &context->gamepads[i];
+        if(!gamepad->connected && !scan) {
+            continue;
+        }
+        XINPUT_STATE state = {};
+        bool connected = XInputGetState(i, &state) == ERROR_SUCCESS;
+        if(!connected) {
+            if(gamepad->connected) {
+                log_print(LOG_PLATFORM, "Gamepad %i disconnected", i);
+                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_DISCONNECT, .gamepad = { .index = i } });
+            }
+            gamepad->connected = false;
+            continue;
+        }
+
+        // Diff a new gamepad against a resting one, so held buttons and moved axes arrive as events
+        if(!gamepad->connected) {
+            log_print(LOG_PLATFORM, "Gamepad %i connected (XInput)", i);
+            platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_CONNECT, .gamepad = { .index = i } });
+            gamepad->connected = true;
+            gamepad->state = (XINPUT_STATE){};
+        }
+
+        // Buttons
+        WORD changed = state.Gamepad.wButtons ^ gamepad->state.Gamepad.wButtons;
+        for(i32 b = 0; b < (i32)(sizeof(button_map) / sizeof(button_map[0])); b++) {
+            if(changed & button_map[b].mask) {
+                bool down = (state.Gamepad.wButtons & button_map[b].mask) != 0;
+                platform_push_event(&context->platform, (PlatformEvent){
+                    .type = down ? PLATFORM_EVENT_GAMEPAD_BUTTON_DOWN : PLATFORM_EVENT_GAMEPAD_BUTTON_UP,
+                    .gamepad = { .index = i, .button = button_map[b].button } });
+            }
+        }
+
+        // Axes
+        f32 axes[PLATFORM_GAMEPAD_AXIS_COUNT];
+        f32 previous_axes[PLATFORM_GAMEPAD_AXIS_COUNT];
+        xinput_axes(&state.Gamepad, axes);
+        xinput_axes(&gamepad->state.Gamepad, previous_axes);
+        for(i32 a = 0; a < PLATFORM_GAMEPAD_AXIS_COUNT; a++) {
+            if(axes[a] != previous_axes[a]) {
+                platform_push_event(&context->platform, (PlatformEvent){
+                    .type = PLATFORM_EVENT_GAMEPAD_AXIS, .gamepad = { .index = i, .axis = (PlatformGamepadAxis)a, .value = axes[a] } });
+            }
+        }
+        gamepad->state = state;
+    }
 }
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -229,8 +293,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             }
             return 0;
         } break;
-        case WM_KEYDOWN: {
-            PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+        // Alt, F10, and keys pressed with alt arrive as system keys. They're kept
+        // from DefWindowProc, which would open the window menu on alt or F10,
+        // except alt+F4 so it still closes the window.
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN: {
+            PlatformKey key = platform_key_from_win32(wparam, lparam);
             if(key == PLATFORM_KEY_NONE) {
                 log_print(LOG_PLATFORM_VERBOSE, "Unmapped key: virtual key 0x%x", (u32)wparam);
             }
@@ -238,10 +306,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             PlatformEventType type = (lparam & (1 << 30)) ? PLATFORM_EVENT_KEYREPEAT : PLATFORM_EVENT_KEYDOWN;
             platform_push_event(&context->platform, (PlatformEvent){
                 .type = type, .modifiers = platform_modifiers_from_win32(), .key = key });
-            return 0;
+            if(message == WM_KEYDOWN || wparam != VK_F4) {
+                return 0;
+            }
         } break;
-        case WM_KEYUP: {
-            PlatformKey key = platform_key_from_win32_virtual_key(wparam);
+        case WM_KEYUP:
+        case WM_SYSKEYUP: {
+            PlatformKey key = platform_key_from_win32(wparam, lparam);
             platform_push_event(&context->platform, (PlatformEvent){
                 .type = PLATFORM_EVENT_KEYUP, .modifiers = platform_modifiers_from_win32(), .key = key });
             return 0;
@@ -552,13 +623,15 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         }
         context->platform.time_ns = profile_time_ns();
 
-        // Pump Win32 messages, which window_proc turns into platform state and events
+        // Pump Win32 messages, which window_proc turns into platform state and events,
+        // then poll gamepads
         profile_begin(PROFILE_PLATFORM_EVENTS);
         MSG message;
         while(PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&message);
             DispatchMessageA(&message);
         }
+        xinput_poll(context);
         profile_end(PROFILE_PLATFORM_EVENTS);
         if(context->close_requested) {
             break;
@@ -655,6 +728,10 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 #include <alloca.h>
 #include <errno.h>
 #include <time.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <sys/inotify.h>
+#include <sys/ioctl.h>
 
 #define ALSA_VERIFY(alsa_function) { \
     i32 alsa_error; \
@@ -662,6 +739,14 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         log_exit("ALSA error: %s", snd_strerror(alsa_error)); \
     } \
 } 
+
+// An open evdev gamepad. fd is -1 for an empty slot.
+typedef struct {
+    i32                 fd;
+    char                path[280];
+    // Ranges of the absolute axes, indexed by ABS_* code
+    struct input_absinfo abs[ABS_HAT0Y + 1];
+} EvdevGamepad;
 
 typedef struct {
     bool                close_requested;
@@ -675,88 +760,269 @@ typedef struct {
     Platform            platform;
 
     GameLibrary         game;
+
+    // Gamepads, one evdev device per slot. inotify reports new devices.
+    EvdevGamepad        gamepads[PLATFORM_MAX_GAMEPADS];
+    i32                 input_watch_fd;
 } Context;
 
+// Keysyms are looked up unshifted (index 0), so letters are lowercase and
+// numpad keys are their numlock-off keysyms.
 PlatformKey platform_key_from_xlib_keysym(u32 keysym) {
+    if(keysym >= XK_a && keysym <= XK_z) return (PlatformKey)(PLATFORM_KEY_A + (keysym - XK_a));
+    if(keysym >= XK_0 && keysym <= XK_9) return (PlatformKey)(PLATFORM_KEY_0 + (keysym - XK_0));
+    if(keysym >= XK_F1 && keysym <= XK_F12) return (PlatformKey)(PLATFORM_KEY_F1 + (keysym - XK_F1));
+    if(keysym >= XK_KP_0 && keysym <= XK_KP_9) return (PlatformKey)(PLATFORM_KEY_NUMPAD_0 + (keysym - XK_KP_0));
     switch(keysym) {
-        case XK_w: {
-            return PLATFORM_KEY_W;
-        } break;
-        case XK_a: {
-            return PLATFORM_KEY_A;
-        } break;
-        case XK_s: {
-            return PLATFORM_KEY_S;
-        } break;
-        case XK_d: {
-            return PLATFORM_KEY_D;
-        } break;
-        case XK_q: {
-            return PLATFORM_KEY_Q;
-        } break;
-        case XK_e: {
-            return PLATFORM_KEY_E;
-        } break;
-        case XK_g: {
-            return PLATFORM_KEY_G;
-        } break;
-        case XK_m: {
-            return PLATFORM_KEY_M;
-        } break;
-        case XK_r: {
-            return PLATFORM_KEY_R;
-        } break;
-        case XK_Up: {
-            return PLATFORM_KEY_UP;
-        } break;
-        case XK_Left: {
-            return PLATFORM_KEY_LEFT;
-        } break;
-        case XK_Down: {
-            return PLATFORM_KEY_DOWN;
-        } break;
-        case XK_Right: {
-            return PLATFORM_KEY_RIGHT;
-        } break;
-        case XK_Escape: {
-            return PLATFORM_KEY_ESCAPE;
-        } break;
-        case XK_Tab: {
-            return PLATFORM_KEY_TAB;
-        } break;
-        case XK_space: {
-            return PLATFORM_KEY_SPACE;
-        } break;
-        case XK_Return: {
-            return PLATFORM_KEY_ENTER;
-        } break;
-        case XK_F3: {
-            return PLATFORM_KEY_F3;
-        } break;
-        case XK_BackSpace: {
-            return PLATFORM_KEY_BACKSPACE;
-        } break;
-        case XK_Delete: {
-            return PLATFORM_KEY_DELETE;
-        } break;
-        case XK_h: {
-            return PLATFORM_KEY_H;
-        } break;
-        case XK_j: {
-            return PLATFORM_KEY_J;
-        } break;
-        case XK_k: {
-            return PLATFORM_KEY_K;
-        } break;
-        case XK_l: {
-            return PLATFORM_KEY_L;
-        } break;
-        default: return PLATFORM_KEY_NONE;
+        case XK_Escape:           return PLATFORM_KEY_ESCAPE;
+        case XK_Tab:              return PLATFORM_KEY_TAB;
+        case XK_ISO_Left_Tab:     return PLATFORM_KEY_TAB;
+        case XK_space:            return PLATFORM_KEY_SPACE;
+        case XK_Return:           return PLATFORM_KEY_ENTER;
+        case XK_BackSpace:        return PLATFORM_KEY_BACKSPACE;
+        case XK_Delete:           return PLATFORM_KEY_DELETE;
+        case XK_Insert:           return PLATFORM_KEY_INSERT;
+        case XK_Home:             return PLATFORM_KEY_HOME;
+        case XK_End:              return PLATFORM_KEY_END;
+        case XK_Prior:            return PLATFORM_KEY_PAGE_UP;
+        case XK_Next:             return PLATFORM_KEY_PAGE_DOWN;
+        case XK_Up:               return PLATFORM_KEY_UP;
+        case XK_Down:             return PLATFORM_KEY_DOWN;
+        case XK_Left:             return PLATFORM_KEY_LEFT;
+        case XK_Right:            return PLATFORM_KEY_RIGHT;
+        case XK_Shift_L:          return PLATFORM_KEY_LEFT_SHIFT;
+        case XK_Shift_R:          return PLATFORM_KEY_RIGHT_SHIFT;
+        case XK_Control_L:        return PLATFORM_KEY_LEFT_CTRL;
+        case XK_Control_R:        return PLATFORM_KEY_RIGHT_CTRL;
+        case XK_Alt_L:            return PLATFORM_KEY_LEFT_ALT;
+        case XK_Alt_R:            return PLATFORM_KEY_RIGHT_ALT;
+        case XK_ISO_Level3_Shift: return PLATFORM_KEY_RIGHT_ALT;
+        case XK_Caps_Lock:        return PLATFORM_KEY_CAPS_LOCK;
+        case XK_grave:            return PLATFORM_KEY_GRAVE;
+        case XK_minus:            return PLATFORM_KEY_MINUS;
+        case XK_equal:            return PLATFORM_KEY_EQUALS;
+        case XK_bracketleft:      return PLATFORM_KEY_LEFT_BRACKET;
+        case XK_bracketright:     return PLATFORM_KEY_RIGHT_BRACKET;
+        case XK_backslash:        return PLATFORM_KEY_BACKSLASH;
+        case XK_semicolon:        return PLATFORM_KEY_SEMICOLON;
+        case XK_apostrophe:       return PLATFORM_KEY_APOSTROPHE;
+        case XK_comma:            return PLATFORM_KEY_COMMA;
+        case XK_period:           return PLATFORM_KEY_PERIOD;
+        case XK_slash:            return PLATFORM_KEY_SLASH;
+        case XK_KP_Insert:        return PLATFORM_KEY_NUMPAD_0;
+        case XK_KP_End:           return PLATFORM_KEY_NUMPAD_1;
+        case XK_KP_Down:          return PLATFORM_KEY_NUMPAD_2;
+        case XK_KP_Next:          return PLATFORM_KEY_NUMPAD_3;
+        case XK_KP_Left:          return PLATFORM_KEY_NUMPAD_4;
+        case XK_KP_Begin:         return PLATFORM_KEY_NUMPAD_5;
+        case XK_KP_Right:         return PLATFORM_KEY_NUMPAD_6;
+        case XK_KP_Home:          return PLATFORM_KEY_NUMPAD_7;
+        case XK_KP_Up:            return PLATFORM_KEY_NUMPAD_8;
+        case XK_KP_Prior:         return PLATFORM_KEY_NUMPAD_9;
+        case XK_KP_Add:           return PLATFORM_KEY_NUMPAD_ADD;
+        case XK_KP_Subtract:      return PLATFORM_KEY_NUMPAD_SUBTRACT;
+        case XK_KP_Multiply:      return PLATFORM_KEY_NUMPAD_MULTIPLY;
+        case XK_KP_Divide:        return PLATFORM_KEY_NUMPAD_DIVIDE;
+        case XK_KP_Delete:        return PLATFORM_KEY_NUMPAD_DECIMAL;
+        case XK_KP_Decimal:       return PLATFORM_KEY_NUMPAD_DECIMAL;
+        case XK_KP_Enter:         return PLATFORM_KEY_NUMPAD_ENTER;
+        default:                  return PLATFORM_KEY_NONE;
     }
-    return PLATFORM_KEY_NONE;
 }
 
 // Modifier keys held as of a key event, from its state mask
+// An evdev absolute axis as a platform value: sticks -1 to 1 with positive y
+// up, triggers 0 to 1. A stick's center is its rest; a trigger's minimum is.
+f32 evdev_axis_value(EvdevGamepad* gamepad, i32 code, i32 value) {
+    struct input_absinfo* info = &gamepad->abs[code];
+    if(info->maximum <= info->minimum) return 0.0f;
+    f32 t = (f32)(value - info->minimum) / (f32)(info->maximum - info->minimum);
+    if(code == ABS_Z || code == ABS_RZ) return f32_clamp(t, 0.0f, 1.0f);
+    f32 centered = f32_clamp(t * 2.0f - 1.0f, -1.0f, 1.0f);
+    // Integer ranges have no exact center, so the rest position can read slightly off 0
+    if(value == (info->minimum + info->maximum + 1) / 2 || value == (info->minimum + info->maximum) / 2) centered = 0.0f;
+    return (code == ABS_Y || code == ABS_RY) ? -centered : centered;
+}
+
+// The platform button for an evdev key code, or -1
+i32 evdev_gamepad_button(u16 code) {
+    switch(code) {
+        case BTN_SOUTH:  return PLATFORM_GAMEPAD_BUTTON_SOUTH;
+        case BTN_EAST:   return PLATFORM_GAMEPAD_BUTTON_EAST;
+        case BTN_WEST:   return PLATFORM_GAMEPAD_BUTTON_WEST;
+        case BTN_NORTH:  return PLATFORM_GAMEPAD_BUTTON_NORTH;
+        case BTN_TL:     return PLATFORM_GAMEPAD_BUTTON_LEFT_SHOULDER;
+        case BTN_TR:     return PLATFORM_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+        case BTN_THUMBL: return PLATFORM_GAMEPAD_BUTTON_LEFT_STICK;
+        case BTN_THUMBR: return PLATFORM_GAMEPAD_BUTTON_RIGHT_STICK;
+        case BTN_START:  return PLATFORM_GAMEPAD_BUTTON_START;
+        case BTN_SELECT: return PLATFORM_GAMEPAD_BUTTON_BACK;
+        case BTN_MODE:   return PLATFORM_GAMEPAD_BUTTON_GUIDE;
+        case BTN_DPAD_UP:    return PLATFORM_GAMEPAD_BUTTON_DPAD_UP;
+        case BTN_DPAD_DOWN:  return PLATFORM_GAMEPAD_BUTTON_DPAD_DOWN;
+        case BTN_DPAD_LEFT:  return PLATFORM_GAMEPAD_BUTTON_DPAD_LEFT;
+        case BTN_DPAD_RIGHT: return PLATFORM_GAMEPAD_BUTTON_DPAD_RIGHT;
+        default:         return -1;
+    }
+}
+
+// Open every evdev device in /dev/input that looks like a gamepad and isn't
+// open yet, and give it a free slot. Devices that can't be opened, usually for
+// lack of permission, are skipped quietly; udev may not have granted access
+// yet, and the next scan retries.
+void evdev_scan(Context* context) {
+    DIR* dir = opendir("/dev/input");
+    if(dir == NULL) {
+        return;
+    }
+    struct dirent* entry;
+    while((entry = readdir(dir)) != NULL) {
+        if(strncmp(entry->d_name, "event", 5) != 0) {
+            continue;
+        }
+        char path[280];
+        snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
+        i32 slot = -1;
+        bool already_open = false;
+        for(i32 i = 0; i < PLATFORM_MAX_GAMEPADS; i++) {
+            if(context->gamepads[i].fd >= 0 && strcmp(context->gamepads[i].path, path) == 0) {
+                already_open = true;
+            }
+            if(context->gamepads[i].fd < 0 && slot < 0) {
+                slot = i;
+            }
+        }
+        if(already_open || slot < 0) {
+            continue;
+        }
+        i32 fd = open(path, O_RDONLY | O_NONBLOCK);
+        if(fd < 0) {
+            continue;
+        }
+
+        // A gamepad has the south face button
+        u8 key_bits[(KEY_MAX + 7) / 8] = {};
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits);
+        if(!(key_bits[BTN_SOUTH / 8] & (1 << (BTN_SOUTH % 8)))) {
+            close(fd);
+            continue;
+        }
+
+        EvdevGamepad* gamepad = &context->gamepads[slot];
+        gamepad->fd = fd;
+        snprintf(gamepad->path, sizeof(gamepad->path), "%s", path);
+        char name[128] = "Unknown";
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        log_print(LOG_PLATFORM, "Gamepad %i connected: %s (%s)", slot, name, path);
+        platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_CONNECT, .gamepad = { .index = slot } });
+
+        // Axis ranges. Axes already off rest are reported, as XInput does.
+        for(i32 code = 0; code <= ABS_HAT0Y; code++) {
+            gamepad->abs[code] = (struct input_absinfo){};
+            ioctl(fd, EVIOCGABS(code), &gamepad->abs[code]);
+        }
+        static const i32 axis_codes[PLATFORM_GAMEPAD_AXIS_COUNT] = {
+            [PLATFORM_GAMEPAD_AXIS_LEFT_X] = ABS_X, [PLATFORM_GAMEPAD_AXIS_LEFT_Y] = ABS_Y,
+            [PLATFORM_GAMEPAD_AXIS_RIGHT_X] = ABS_RX, [PLATFORM_GAMEPAD_AXIS_RIGHT_Y] = ABS_RY,
+            [PLATFORM_GAMEPAD_AXIS_LEFT_TRIGGER] = ABS_Z, [PLATFORM_GAMEPAD_AXIS_RIGHT_TRIGGER] = ABS_RZ,
+        };
+        for(i32 a = 0; a < PLATFORM_GAMEPAD_AXIS_COUNT; a++) {
+            f32 value = evdev_axis_value(gamepad, axis_codes[a], gamepad->abs[axis_codes[a]].value);
+            if(value != 0.0f) {
+                platform_push_event(&context->platform, (PlatformEvent){
+                    .type = PLATFORM_EVENT_GAMEPAD_AXIS, .gamepad = { .index = slot, .axis = (PlatformGamepadAxis)a, .value = value } });
+            }
+        }
+    }
+    closedir(dir);
+}
+
+// Pick up new gamepads, then turn every open gamepad's queued evdev events into
+// platform events.
+// TODO: Resync from EVIOCGKEY/EVIOCGABS after SYN_DROPPED, when the kernel's queue overflowed
+// TODO: Per-controller quirks. Some drivers swap the north and west buttons, or put triggers elsewhere than ABS_Z/ABS_RZ.
+void evdev_poll(Context* context) {
+    // Any change in /dev/input prompts a rescan. Attribute changes count, since
+    // udev grants access after the device node appears.
+    bool rescan = false;
+    char watch_buffer[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    while(context->input_watch_fd >= 0 && read(context->input_watch_fd, watch_buffer, sizeof(watch_buffer)) > 0) {
+        rescan = true;
+    }
+    if(rescan) {
+        evdev_scan(context);
+    }
+
+    for(i32 slot = 0; slot < PLATFORM_MAX_GAMEPADS; slot++) {
+        EvdevGamepad* gamepad = &context->gamepads[slot];
+        if(gamepad->fd < 0) {
+            continue;
+        }
+        struct input_event events[64];
+        ssize_t bytes;
+        while((bytes = read(gamepad->fd, events, sizeof(events))) > 0) {
+            i32 events_len = (i32)(bytes / sizeof(struct input_event));
+            for(i32 i = 0; i < events_len; i++) {
+                struct input_event* event = &events[i];
+                if(event->type == EV_KEY) {
+                    i32 button = evdev_gamepad_button(event->code);
+                    // A value of 2 is the kernel's auto-repeat, which gamepads don't need
+                    if(button < 0 || event->value == 2) {
+                        continue;
+                    }
+                    platform_push_event(&context->platform, (PlatformEvent){
+                        .type = event->value ? PLATFORM_EVENT_GAMEPAD_BUTTON_DOWN : PLATFORM_EVENT_GAMEPAD_BUTTON_UP,
+                        .gamepad = { .index = slot, .button = (PlatformGamepadButton)button } });
+                } else if(event->type == EV_ABS) {
+                    switch(event->code) {
+                        case ABS_X:  case ABS_Y:  case ABS_RX: case ABS_RY: case ABS_Z: case ABS_RZ: {
+                            PlatformGamepadAxis axis = event->code == ABS_X  ? PLATFORM_GAMEPAD_AXIS_LEFT_X
+                                                     : event->code == ABS_Y  ? PLATFORM_GAMEPAD_AXIS_LEFT_Y
+                                                     : event->code == ABS_RX ? PLATFORM_GAMEPAD_AXIS_RIGHT_X
+                                                     : event->code == ABS_RY ? PLATFORM_GAMEPAD_AXIS_RIGHT_Y
+                                                     : event->code == ABS_Z  ? PLATFORM_GAMEPAD_AXIS_LEFT_TRIGGER
+                                                     :                         PLATFORM_GAMEPAD_AXIS_RIGHT_TRIGGER;
+                            platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_AXIS,
+                                .gamepad = { .index = slot, .axis = axis, .value = evdev_axis_value(gamepad, event->code, event->value) } });
+                        } break;
+                        // Many drivers report the dpad as a hat axis: -1, 0 or 1 per direction
+                        case ABS_HAT0X: case ABS_HAT0Y: {
+                            bool x = event->code == ABS_HAT0X;
+                            i32 previous = gamepad->abs[event->code].value;
+                            PlatformGamepadButton negative = x ? PLATFORM_GAMEPAD_BUTTON_DPAD_LEFT : PLATFORM_GAMEPAD_BUTTON_DPAD_UP;
+                            PlatformGamepadButton positive = x ? PLATFORM_GAMEPAD_BUTTON_DPAD_RIGHT : PLATFORM_GAMEPAD_BUTTON_DPAD_DOWN;
+                            if(previous < 0 && event->value >= 0) {
+                                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_BUTTON_UP, .gamepad = { .index = slot, .button = negative } });
+                            }
+                            if(previous > 0 && event->value <= 0) {
+                                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_BUTTON_UP, .gamepad = { .index = slot, .button = positive } });
+                            }
+                            if(event->value < 0 && previous >= 0) {
+                                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_BUTTON_DOWN, .gamepad = { .index = slot, .button = negative } });
+                            }
+                            if(event->value > 0 && previous <= 0) {
+                                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_BUTTON_DOWN, .gamepad = { .index = slot, .button = positive } });
+                            }
+                        } break;
+                        default: break;
+                    }
+                    if(event->code <= ABS_HAT0Y) {
+                        gamepad->abs[event->code].value = event->value;
+                    }
+                }
+            }
+        }
+
+        // ENODEV means the gamepad was unplugged
+        if(bytes < 0 && errno != EAGAIN) {
+            log_print(LOG_PLATFORM, "Gamepad %i disconnected (%s)", slot, strerror(errno));
+            close(gamepad->fd);
+            gamepad->fd = -1;
+            platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_GAMEPAD_DISCONNECT, .gamepad = { .index = slot } });
+        }
+    }
+}
+
 u32 platform_modifiers_from_xlib_state(u32 state) {
     u32 modifiers = PLATFORM_MODIFIER_NONE;
     if(state & ShiftMask)   modifiers |= PLATFORM_MODIFIER_SHIFT;
@@ -867,6 +1133,16 @@ i32 main(i32 argc, char** argv) {
     log_print(LOG_ASSET, "Asset pack: %" PRIu64 " bytes", (u64)ASSET_PACK_SIZE);
     context->game.init(game_stack.memory, asset_pack_data, render_setup, &context->platform);
     vk_load_assets(vk, render_setup);
+
+    // Find gamepads, and watch for more. Without inotify, only gamepads present at startup are found.
+    for(i32 i = 0; i < PLATFORM_MAX_GAMEPADS; i++) {
+        context->gamepads[i].fd = -1;
+    }
+    context->input_watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if(context->input_watch_fd < 0 || inotify_add_watch(context->input_watch_fd, "/dev/input", IN_CREATE | IN_ATTRIB) < 0) {
+        log_print(LOG_WARN, "Couldn't watch /dev/input for gamepads (%s)", strerror(errno));
+    }
+    evdev_scan(context);
 
     // Loop
     u64 frame_count = 0;
@@ -999,6 +1275,7 @@ i32 main(i32 argc, char** argv) {
                 default: break;
             }
         }
+        evdev_poll(context);
         profile_end(PROFILE_PLATFORM_EVENTS);
 
         // Update game, which writes the frame straight into GPU memory

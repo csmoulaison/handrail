@@ -87,7 +87,7 @@ function Static {
         $FLAGS `
         /D'GAME_NAME=\"game\"' /D'GAME_LIB_NAME=\"game.dll\"' `
         /nologo `
-        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib avrt.lib onecore.lib
+        /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib ole32.lib avrt.lib onecore.lib xinput.lib
     End-Step
 }
 
