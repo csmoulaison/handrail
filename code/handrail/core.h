@@ -103,6 +103,7 @@ typedef struct Stack  Stack;
 #include "handrail/media/pcm.h"
 #include "handrail/ui.h"
 #include "handrail/debug_view.h"
+#include "handrail/timestep.h"
 
 #include "handrail/render.h"
 #include "handrail/game.h"
@@ -144,6 +145,7 @@ typedef struct Stack  Stack;
 #include "handrail/media/pcm.h"
 #include "handrail/ui.h"
 #include "handrail/debug_view.h"
+#include "handrail/timestep.h"
 
 #include "handrail/render.h"
 #include "handrail/game.h"
