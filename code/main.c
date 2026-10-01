@@ -52,6 +52,7 @@ void game_library_update(GameLibrary* game) {
 
 #define COBJMACROS
 #include <objbase.h>
+#include <windowsx.h>
 #include <avrt.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
@@ -188,6 +189,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         } break;
         case WM_ACTIVATE: {
             log_print(LOG_PLATFORM, LOWORD(wparam) == WA_INACTIVE ? "Window focus lost" : "Window focus gained");
+            if(LOWORD(wparam) == WA_INACTIVE) {
+                platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_DEFOCUS });
+            }
         } break;
         case WM_SIZE: {
             iv2 window_size = iv2_new(LOWORD(lparam), HIWORD(lparam));
@@ -213,6 +217,37 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         case WM_KEYUP: {
             PlatformKey key = platform_key_from_win32_virtual_key(wparam);
             platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_KEYUP, .key = key });
+            return 0;
+        } break;
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONUP:
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONUP: {
+            // Signed coordinates, since captured drags report positions outside the window
+            iv2 position = iv2_new(GET_X_LPARAM(lparam), context->platform.window_size.y - GET_Y_LPARAM(lparam));
+            context->platform.mouse_position = position;
+            if(message == WM_MOUSEMOVE) {
+                return 0;
+            }
+            bool down = message == WM_LBUTTONDOWN || message == WM_MBUTTONDOWN || message == WM_RBUTTONDOWN;
+            PlatformMouseButton button = PLATFORM_MOUSE_BUTTON_LEFT;
+            if(message == WM_MBUTTONDOWN || message == WM_MBUTTONUP) {
+                button = PLATFORM_MOUSE_BUTTON_MIDDLE;
+            } else if(message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) {
+                button = PLATFORM_MOUSE_BUTTON_RIGHT;
+            }
+            // Capture the mouse while any button is held, so drags keep reporting outside the window
+            if(down) {
+                SetCapture(hwnd);
+            } else if((wparam & (MK_LBUTTON | MK_MBUTTON | MK_RBUTTON)) == 0) {
+                ReleaseCapture();
+            }
+            platform_push_event(&context->platform, (PlatformEvent){
+                .type = down ? PLATFORM_EVENT_MOUSE_DOWN : PLATFORM_EVENT_MOUSE_UP,
+                .mouse = { .button = button, .position = position } });
             return 0;
         } break;
         default: break;
@@ -757,6 +792,27 @@ i32 main(i32 argc, char** argv) {
                 } break;
                 case FocusOut: {
                     log_print(LOG_PLATFORM, "Window focus lost");
+                    platform_push_event(&context->platform, (PlatformEvent){ .type = PLATFORM_EVENT_DEFOCUS });
+                } break;
+                case MotionNotify: {
+                    context->platform.mouse_position = iv2_new(event.xmotion.x, context->platform.window_size.y - event.xmotion.y);
+                } break;
+                case ButtonPress:
+                case ButtonRelease: {
+                    // X buttons 4-7 are the scroll wheel
+                    // TODO: scroll wheel
+                    if(event.xbutton.button < Button1 || event.xbutton.button > Button3) {
+                        log_print(LOG_PLATFORM_VERBOSE, "Unmapped mouse button %u", event.xbutton.button);
+                        break;
+                    }
+                    PlatformMouseButton button = event.xbutton.button == Button1 ? PLATFORM_MOUSE_BUTTON_LEFT
+                                               : event.xbutton.button == Button2 ? PLATFORM_MOUSE_BUTTON_MIDDLE
+                                               : PLATFORM_MOUSE_BUTTON_RIGHT;
+                    iv2 position = iv2_new(event.xbutton.x, context->platform.window_size.y - event.xbutton.y);
+                    context->platform.mouse_position = position;
+                    platform_push_event(&context->platform, (PlatformEvent){
+                        .type = event.type == ButtonPress ? PLATFORM_EVENT_MOUSE_DOWN : PLATFORM_EVENT_MOUSE_UP,
+                        .mouse = { .button = button, .position = position } });
                 } break;
                 case ConfigureNotify: {
                     // ConfigureNotify also fires on moves, so only flag real size changes

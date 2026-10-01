@@ -28,10 +28,18 @@ typedef enum {
 } PlatformKey;
 
 typedef enum {
+    PLATFORM_MOUSE_BUTTON_LEFT,
+    PLATFORM_MOUSE_BUTTON_MIDDLE,
+    PLATFORM_MOUSE_BUTTON_RIGHT,
+} PlatformMouseButton;
+
+typedef enum {
     PLATFORM_EVENT_NONE,
     PLATFORM_EVENT_KEYDOWN,
     PLATFORM_EVENT_KEYUP,
-    PLATFORM_EVENT_DEFOCUS
+    PLATFORM_EVENT_DEFOCUS,
+    PLATFORM_EVENT_MOUSE_DOWN,
+    PLATFORM_EVENT_MOUSE_UP,
 } PlatformEventType;
 
 typedef struct {
@@ -39,6 +47,11 @@ typedef struct {
     union {
         PlatformKey key;
         iv2         viewport_size;
+        // Position is in window pixels, origin bottom left
+        struct {
+            PlatformMouseButton button;
+            iv2                 position;
+        } mouse;
     };
 } PlatformEvent;
 
@@ -47,6 +60,8 @@ typedef struct {
     Profile*      profile;
     iv2           window_size;
     bool          window_size_updated_this_frame;
+    // In window pixels, origin bottom left. Outside the window while a drag is captured.
+    iv2           mouse_position;
     PlatformEvent events[PLATFORM_MAX_EVENTS_PER_FRAME];
     i32           events_len;
 } Platform;
