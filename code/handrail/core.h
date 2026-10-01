@@ -70,6 +70,7 @@ typedef struct Stack  Stack;
 #include "handrail/random.h"
 #include "handrail/file.h"
 #include "handrail/log.h"
+#include "handrail/profile.h"
 #include "handrail/math.h"
 
 #ifdef HANDRAIL_INCLUDE_GL
@@ -108,6 +109,7 @@ typedef struct Stack  Stack;
 #include "handrail/random.h"
 #include "handrail/file.h"
 #include "handrail/log.h"
+#include "handrail/profile.h"
 #include "handrail/math.h"
 
 #ifdef HANDRAIL_INCLUDE_GL

@@ -96,6 +96,7 @@ typedef struct {
 typedef struct {
     bool        close_requested;
     Log         log;
+    Profile     profile;
     HWND        hwnd;
     Platform    platform;
     GameLibrary game;
@@ -297,6 +298,11 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
     log_bind(&context->log);
     context->platform.log = &context->log;
+
+    // Initialize profiling
+    profile_init(&context->profile);
+    profile_bind(&context->profile);
+    context->platform.profile = &context->profile;
     log_print(LOG_INFO, "%s starting on Windows, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
               GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
     log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
@@ -428,17 +434,18 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     bool was_minimized = false;
     LONG reported_underrun_count = 0;
     bool priority_reported = false;
-    LARGE_INTEGER counter_frequency;
-    LARGE_INTEGER frame_start;
-    QueryPerformanceFrequency(&counter_frequency);
-    QueryPerformanceCounter(&frame_start);
+    u64 frame_start = profile_time_ns();
     while(context->close_requested == false) {
+        profile_begin(PROFILE_FRAME);
+
         // Pump Win32 messages, which window_proc turns into platform state and events
+        profile_begin(PROFILE_PLATFORM_EVENTS);
         MSG message;
         while(PeekMessageA(&message, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&message);
             DispatchMessageA(&message);
         }
+        profile_end(PROFILE_PLATFORM_EVENTS);
         if(context->close_requested) {
             break;
         }
@@ -453,11 +460,16 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         // Update game, which writes the frame straight into GPU memory
         RenderFrame render_frame;
         if(!minimized) {
+            profile_begin(PROFILE_RENDER_BEGIN);
             vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+            profile_end(PROFILE_RENDER_BEGIN);
+            profile_begin(PROFILE_GAME_UPDATE);
             context->game.update(game_stack.memory, &render_frame, &context->platform);
+            profile_end(PROFILE_GAME_UPDATE);
         }
 
         // Top the audio ring up to the target latency. The game writes straight into it.
+        profile_begin(PROFILE_AUDIO);
         u32 write_offset = (u32)audio->write_offset;
         u32 read_offset = (u32)ReadAcquire(&audio->read_offset);
         i32 queued_frames = (i32)((write_offset - read_offset) / AUDIO_BYTES_PER_FRAME);
@@ -471,6 +483,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
             context->game.audio_callback(game_stack.memory, samples, frames_len);
             InterlockedAdd(&audio->write_offset, (LONG)(frames_len * AUDIO_BYTES_PER_FRAME));
         }
+        profile_end(PROFILE_AUDIO);
 
         // Report what the audio thread counted, since it doesn't log
         LONG underrun_count = ReadAcquire(&audio->underrun_count);
@@ -486,7 +499,9 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 
         // Render
         if(!minimized) {
+            profile_begin(PROFILE_RENDER_END);
             vk_frame_end(vk, &render_frame);
+            profile_end(PROFILE_RENDER_END);
         } else {
             Sleep(10);
         }
@@ -498,13 +513,14 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
         context->platform.events_len = 0;
 
         // Frame timing
-        LARGE_INTEGER frame_end;
-        QueryPerformanceCounter(&frame_end);
-        f64 frame_time = (f64)(frame_end.QuadPart - frame_start.QuadPart) / (f64)counter_frequency.QuadPart;
+        u64 frame_end = profile_time_ns();
+        f64 frame_time = (f64)(frame_end - frame_start) / 1e9;
         frame_start = frame_end;
         frame_time_total += frame_time;
         frame_count++;
         log_print(LOG_RENDER_VERBOSE, "Frame %" PRIu64 ": %.2f ms", frame_count, frame_time * 1000.0);
+        profile_end(PROFILE_FRAME);
+        profile_frame_end();
     }
 
     // Stop the audio thread before the process tears down the memory it uses
@@ -515,6 +531,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
     // Shut down
     log_print(LOG_INFO, "Shutting down after %" PRIu64 " frames, average frame time %.2f ms",
               frame_count, frame_count > 0 ? frame_time_total / (f64)frame_count * 1000.0 : 0.0);
+    profile_log(LOG_INFO);
     stack_log_usage(&root_stack);
     stack_log_usage(&game_stack);
     stack_log_usage(&render_stack);
@@ -547,6 +564,7 @@ i32 WINAPI WinMain(HINSTANCE hinstance, HINSTANCE prev_hinstance, PSTR cmd_line,
 typedef struct {
     bool                close_requested;
     Log                 log;
+    Profile             profile;
 
     Display*            display;
     Window              window;
@@ -628,6 +646,11 @@ i32 main(i32 argc, char** argv) {
     log_init(&context->log, LOG_TARGETS, string_const(LOG_FILE_PATH));
     log_bind(&context->log);
     context->platform.log = &context->log;
+
+    // Initialize profiling
+    profile_init(&context->profile);
+    profile_bind(&context->profile);
+    context->platform.profile = &context->profile;
     log_print(LOG_INFO, "%s starting on Linux, built " __DATE__ " " __TIME__ ", log mask 0x%" PRIx64 ", targets 0x%x",
               GAME_NAME, (u64)(LOG_MASK), (u32)(LOG_TARGETS));
     log_print(LOG_MEMORY, "Root memory %" PRIu64 " bytes: context %" PRIu64 ", game %" PRIu64 ", renderer %" PRIu64 ", platform frame %" PRIu64,
@@ -704,10 +727,12 @@ i32 main(i32 argc, char** argv) {
     // Loop
     u64 frame_count = 0;
     f64 frame_time_total = 0.0;
-    struct timespec frame_start;
-    clock_gettime(CLOCK_MONOTONIC, &frame_start);
+    u64 frame_start = profile_time_ns();
     while(context->close_requested == false) {
+        profile_begin(PROFILE_FRAME);
+
         // Poll Xlib events
+        profile_begin(PROFILE_PLATFORM_EVENTS);
         while(XPending(context->display)) {
             XEvent event;
             XNextEvent(context->display, &event);
@@ -770,13 +795,19 @@ i32 main(i32 argc, char** argv) {
                 default: break;
             }
         }
+        profile_end(PROFILE_PLATFORM_EVENTS);
 
         // Update game, which writes the frame straight into GPU memory
         RenderFrame render_frame;
+        profile_begin(PROFILE_RENDER_BEGIN);
         vk_frame_begin(vk, context->platform.window_size, context->platform.window_size_updated_this_frame, &render_frame);
+        profile_end(PROFILE_RENDER_BEGIN);
+        profile_begin(PROFILE_GAME_UPDATE);
         context->game.update(game_stack.memory, &render_frame, &context->platform);
+        profile_end(PROFILE_GAME_UPDATE);
 
         // Update ALSA sound. An underrun (-EPIPE) stops the stream until it's recovered.
+        profile_begin(PROFILE_AUDIO);
         snd_pcm_sframes_t available;
         snd_pcm_sframes_t delay;
         i32 avail_result = snd_pcm_avail_delay(context->alsa_pcm, &available, &delay);
@@ -809,9 +840,12 @@ i32 main(i32 argc, char** argv) {
                 log_print(LOG_WARN, "ALSA wrote %li of %i frames", (long)frames_written, frames_len);
             }
         }
+        profile_end(PROFILE_AUDIO);
 
         // Render
+        profile_begin(PROFILE_RENDER_END);
         vk_frame_end(vk, &render_frame);
+        profile_end(PROFILE_RENDER_END);
 
         // Prepare for next frame
         stack_clear(&platform_frame_stack);
@@ -820,18 +854,20 @@ i32 main(i32 argc, char** argv) {
         context->platform.events_len = 0;
 
         // Frame timing
-        struct timespec frame_end;
-        clock_gettime(CLOCK_MONOTONIC, &frame_end);
-        f64 frame_time = (f64)(frame_end.tv_sec - frame_start.tv_sec) + (f64)(frame_end.tv_nsec - frame_start.tv_nsec) / 1e9;
+        u64 frame_end = profile_time_ns();
+        f64 frame_time = (f64)(frame_end - frame_start) / 1e9;
         frame_start = frame_end;
         frame_time_total += frame_time;
         frame_count++;
         log_print(LOG_RENDER_VERBOSE, "Frame %" PRIu64 ": %.2f ms", frame_count, frame_time * 1000.0);
+        profile_end(PROFILE_FRAME);
+        profile_frame_end();
     }
 
     // Shut down
     log_print(LOG_INFO, "Shutting down after %" PRIu64 " frames, average frame time %.2f ms",
               frame_count, frame_count > 0 ? frame_time_total / (f64)frame_count * 1000.0 : 0.0);
+    profile_log(LOG_INFO);
     stack_log_usage(&root_stack);
     stack_log_usage(&game_stack);
     stack_log_usage(&render_stack);
